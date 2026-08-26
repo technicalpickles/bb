@@ -207,8 +207,95 @@ ephemeral `hostType` and no cascade-cleanup when a host disappears** — a
 separate, and probably harder, piece of work than making harness execution
 pluggable (§2–§3).
 
+## 6. Concrete spike: one bb host daemon in a single, disposable Docker container
+
+Narrowed scope, chosen deliberately simpler than §3/§5: no server-side
+changes, no new `hostType`, no provider SDK — just "can today's enrollment
+flow run cleanly inside one throwaway container, with the container's own
+lifecycle (`docker run` / `docker rm`) as the cleanup." Based on reading
+`apps/server/src/assets/install-machine.sh` in full (this is the actual
+script the app tells a human to run — see §1's "Add an execution machine"
+in [multiple-devices.md](multiple-devices.md)):
+
+**The script already has a container-shaped path.** Setting
+`BB_INSTALL_SKIP_SERVICE=1` makes it skip the systemd/launchd persistent-
+service installation entirely and exit right after the daemon joins,
+*leaving the temporary joined daemon process running* (the code comment
+calls this out directly: "Tests and source-development smoke runs can leave
+the enrolled daemon in the foreground-supervised process without modifying
+the user's service manager" — `install-machine.sh:581-582`). That's exactly
+the shape a disposable container wants: no init system, no service manager,
+the daemon just runs as (or under) the container's main process and
+`docker stop`/`docker rm` is the teardown — no separate "uninstall" step to
+run inside the container.
+
+Concrete recipe implied by the script:
+
+```dockerfile
+FROM node:22-bookworm-slim   # >=22.19 required (install-machine.sh:138); avoid alpine — see caveat below
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      curl ca-certificates git && rm -rf /var/lib/apt/lists/*
+```
+Then, at `docker run` time (not baked into the image, since join codes are
+single-use and minted per-host — see §5):
+
+```bash
+docker run --rm \
+  -e BB_INSTALL_SKIP_SERVICE=1 \
+  bb-sandbox-host \
+  sh install-machine.sh --join-code "$CODE" --host-id "$HOST_ID" --server "$SERVER_URL"
+```
+
+Caveats surfaced by actually reading the script, not assumed:
+
+- The native addons (`better-sqlite3`, `node-pty`, `@parcel/watcher`) are
+  the single hard-failure check in the whole script
+  (`install-machine.sh:436-448`: "npm installed bb-app, but its native
+  add-ons... did not load"). It also explicitly passes
+  `--allow-scripts=better-sqlite3,node-pty,@parcel/watcher` to npm because
+  "npm >= 12 blocks dependency install scripts by default for global
+  installs" (`install-machine.sh:184-190`) — any container recipe must
+  carry that same flag.
+- Data dir defaults to `$HOME/.bb-machines/<server-host>`
+  (`install-machine.sh:174`), overridable via `BB_DATA_DIR` — fine as
+  in-container ephemeral state, no volume needed for a fully disposable
+  container.
+- Platform check only accepts `Darwin`/`Linux` (`install-machine.sh:128-135`)
+  — a Linux container image is required, which is the natural choice anyway.
+- The script downloads bb's own build from `${server_url}/install/bb-app.tgz`
+  at run time (`install-machine.sh:375`) rather than the image baking in a
+  pinned bb-app version — this means the container always gets the
+  currently-running server's build, which is actually convenient (no image
+  rebuild needed when bb ships a new version) but means the container
+  needs network access to the bb server, not just to npm's registry.
+
+**What we could not verify in this session**: whether
+`better-sqlite3`/`node-pty`/`@parcel/watcher` install cleanly (prebuilt
+binaries, no compiler needed) on a plain `node:22-bookworm-slim` image.
+Attempted to actually test this by pulling the base image and running the
+npm install inside a container — this session's egress policy blocks
+`production.cloudfront.docker.com` (the CDN Docker Hub redirects blob pulls
+to), confirmed via the proxy status endpoint (`connect_rejected`, "gateway
+answered 403... policy denial"), not a transient failure. This needs to be
+tried in an environment with real Docker Hub access before relying on it —
+if any of the three lack prebuilt musl/glibc binaries for the target image,
+the `apt-get install` line above would need `python3 make g++` added for a
+source build, which is where alpine (musl libc) is the most likely to need
+that fallback specifically because of `@parcel/watcher`'s history of
+native-binding platform gaps.
+
+**Cleanup beyond `docker rm`**: per §5 finding #2, the container disappearing
+does *not* clean up the corresponding `Environment` row on the server side —
+`docker rm` handles the compute, but the teardown script still needs to call
+`DELETE /hosts/:id` (or the equivalent `bb machine` command) explicitly, or
+the environment row is left dangling exactly as described there.
+
 ## Open threads / not yet investigated
 
+- **Native addon install on a plain Debian-slim Node image** — the one
+  concrete unknown left from §6. Needs a session/machine with real Docker
+  Hub access (this session's egress policy blocks the CDN host Docker Hub
+  blob pulls redirect to).
 - Whether Modal/Beam's exec APIs are actually closer to a real bidirectional
   pipe than Daytona/E2B's (would reduce the need for the
   "run bb-daemon inside the sandbox" indirection for those two
