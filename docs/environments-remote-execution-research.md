@@ -290,6 +290,81 @@ does *not* clean up the corresponding `Environment` row on the server side —
 `DELETE /hosts/:id` (or the equivalent `bb machine` command) explicitly, or
 the environment row is left dangling exactly as described there.
 
+## 7. Thread durability / resuming on a different host
+
+Separate concern from provisioning or host churn: if a container dies
+mid-thread, can that thread be "respun" in a brand new container, and what
+would actually survive?
+
+**Durable, server-side, host-independent:** the `Thread`'s append-only event
+stream (every message, tool call, turn boundary) lives in the server's
+SQLite DB. The pointer to the provider's last session
+(`providerThreadId`) is reconstructable purely from that log —
+`getLastProviderThreadId` (`apps/server/src/services/threads/thread-events.ts:962-967`)
+reads it back with no host round-trip.
+
+**Host/container-local only, never reaches the server** — each harness
+keeps its actual session *content* as local files on whichever host last
+ran it, not in bb's event log:
+
+- **Claude Code** — Agent SDK's own local session storage, addressed by
+  `resume: resumeSessionId` (`plugins/provider-claude-code/src/bridge/sdk-session.ts:300`).
+- **Codex** — rollout files on local disk. The code's own comment:
+  "bb releases idle sessions and later resumes by provider thread id, so
+  the rollout must exist on disk... Codex rollouts persist on disk, so
+  every session is restorable" (`plugins/provider-codex/src/bridge/bridge.ts:586,1021-1024`)
+  — restorable only as long as that disk still exists.
+- **pi** — literal path `~/.bb/pi-bridge-sessions/<threadId>.jsonl`
+  (`packages/agent-runtime/src/pi/bridge/session-paths.ts:14-32`), keyed by
+  the provider's own identity on that specific host.
+- **ACP** — depends entirely on the wrapped agent's own `session/resume`
+  support and whatever local state it keeps.
+
+bb transmits the *coordinates* (provider thread id + `cwd`) needed to look
+a session up — never the session content itself.
+
+**Existing resume mechanism assumes the same host/workspace.**
+`runtime-thread-rewind.test.ts` is a different feature entirely (forking a
+provider session at an earlier checkpoint when a user edits a past
+message, gated by `ProviderFork` capability — `packages/domain/src/provider-fork.ts`).
+The actual "restart a provider process and resume its prior session" path
+is `AgentRuntime.resumeThread` (`packages/agent-runtime/src/runtime.ts:1779-1911`),
+which sends a `thread/resume` bridge command hardcoding the environment's
+live `workspacePath` (`runtime.ts:1859`). It does not re-provision
+anything — it assumes the workspace directory, and the provider's local
+session file, are already sitting at that exact path on that host. Called
+both for idle-session revival and by
+`resumeThreadRuntimeIfMissing` (`apps/host-daemon/src/command-handlers/thread.ts:174-210`)
+after a daemon restart — always same-host.
+
+**No "host is gone" thread state, and no cross-host reassignment exists.**
+`ThreadStatus` is only `["idle", "starting", "active", "stopping", "error"]`
+(`packages/domain/src/thread-status.ts:3-9`) — a disconnected host's active
+threads just get marked interrupted via `interruptActiveThreads`
+(`apps/server/src/internal/session-owner-side-effects.ts:134-176`,
+`thread-lifecycle.ts:1578`), indistinguishable from any other interruption.
+`Environment.hostId` stays immutable; nothing repoints an existing thread
+at a freshly created environment/host after its old one disappears.
+
+**Uncommitted workspace changes are simply gone.** No snapshot, stash, or
+auto-commit mechanism exists in `packages/host-workspace` — grepped
+`workspace.ts`/`provision.ts`/`git.ts`, no hits. Environment destroy
+proceeds unconditionally regardless of a dirty working tree.
+
+**Assessment:** respinning a dead container's thread today would preserve
+the full bb-level transcript (readable, could be handed to a fresh session
+as context) but get a provider CLI with amnesia rather than a true
+continuation — no code path exists to reconstruct or transmit a harness's
+own session content across hosts — plus total loss of anything uncommitted.
+The structural gap isn't really the session-content loss (a fresh session
+could plausibly be re-seeded from bb's own transcript with enough new
+tooling); it's that **nothing in the system treats "resume on a different
+host" as a first-class operation at all** — resume is implicitly
+same-host-reconnects, full stop. This is a separate problem from
+provisioning (§3, §6) and host churn (§5): even with a working
+`HostProvisioner` and a real ephemeral `hostType`, a thread whose host died
+mid-turn still has nowhere to resume *to* without new plumbing here.
+
 ## Open threads / not yet investigated
 
 - **Native addon install on a plain Debian-slim Node image** — the one
@@ -313,3 +388,10 @@ the environment row is left dangling exactly as described there.
   `Environment.hostId` becoming mutable is required or whether
   environments should just be recreated, and how this interacts with
   `bb machine` CLI/UI surfaces.
+- No design work on cross-host thread resume (§7): what a "reseed a
+  provider's session from bb's own event log" fallback would need per
+  provider, whether that's even desirable vs. always starting fresh
+  post-migration, and whether an ephemeral `hostType` should require
+  committing/pushing before a host is allowed to be torn down (closing the
+  uncommitted-changes gap) rather than solving true mid-session
+  portability.
