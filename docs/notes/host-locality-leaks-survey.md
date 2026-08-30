@@ -78,7 +78,18 @@ server. If the agent booted a dev server on a remote host, the rewritten
 link points at the wrong machine. On by default
 (`REWRITE_LOCALHOST_LINKS_DEFAULT = true`).
 
-There is no concept of "expose a port from the host running this thread."
+**Correction (2026-08-30):** the first draft said "there is no concept of
+expose a port from the host running this thread." That is wrong.
+`bb.hosts.declareSharedPorts(hostId, ports)` and
+`bb.hosts.ensureSharedPortTunnel(hostId)`
+([`packages/plugin-sdk/src/backend-contract.ts:1142-1171`](../../packages/plugin-sdk/src/backend-contract.ts))
+let a plugin declare loopback ports on a specific host; the server
+aggregates them, owns generations, retains the declaration while the host is
+offline, and delivers it on the next credentialed daemon session.
+
+The leak is narrower than stated: the primitive exists, and the link
+rewriter does not use it. `rewriteLocalhostLinkHref` swaps in the browser's
+hostname rather than resolving the thread's host through the tunnel.
 
 ### 1d. Plugin backends run on the server, with server-local powers
 
@@ -211,14 +222,26 @@ Two observations:
   member, `findLocalPathProjectSourceForHost(sources, hostId)` exists, and
   `Project.gitRemoteUrl` is already a field. Multi-host projects are
   modeled; the missing piece is a source type that can *materialize*.
-- **There is no way to bring a project to a new host.** A freshly booted
-  container has no `local_path` source, and nothing clones one. Combined
-  with `Environment.hostId` being immutable (research notes §5, finding 3),
-  a new host is inert until a human registers a path on it.
+- **Correction (2026-08-30): a project CAN be brought to a new host.** The
+  first draft said "nothing clones one." Wrong. `POST /projects/:id/sources`
+  with `type: "clone"`
+  ([`apps/server/src/routes/projects.ts:472-530`](../../apps/server/src/routes/projects.ts))
+  sends a `project.clone` daemon command using `Project.gitRemoteUrl` as the
+  anchor, then creates the `local_path` source at the resolved path. Clone
+  is an *action that produces* a `local_path`, not a source type — which is
+  why the union stayed at one member and the first pass missed it.
 
-This is upstream of everything in §5–§7 of the research notes: ephemeral
-`hostType` and cross-host resume don't matter if the project can't exist on
-the new host in the first place.
+  Root cause of the miss: the survey enumerated daemon commands by grepping
+  `z.literal("host.*")`. There are seven other namespaces —
+  `project.*`, `environment.*`, `workspace.*`, `thread.*`, `provider.*`,
+  `turn.*`, `interactive.*`. Anything claiming "bb cannot do X on a host"
+  must check all of them.
+
+The real gap is narrower than "can't materialize": cloning is an explicit,
+manual API call with a `(project_id, host_id)` unique constraint. Nothing
+does it as part of provisioning, and `Environment.hostId` is still immutable
+(research notes §5, finding 3), so a new host is inert until someone
+deliberately adds a source to it.
 
 ---
 
@@ -273,9 +296,20 @@ anything new:
 
 ## Ranked read on what's actually blocking
 
-1. **Project can't exist on a new host** (§5). Everything else is downstream.
+**Superseded 2026-08-30.** This ranking was written before the container
+spike (research notes §8) and before the two corrections above. It ranked
+project materialization first on a claim that turned out false. The current
+read lives in
+[environment-capability-model.md](environment-capability-model.md): the two
+axes with no machinery at all are **state durability** and **credential
+acquisition**, and the rest have partial primitives already. Kept below as
+written, for the record.
+
+1. ~~**Project can't exist on a new host** (§5). Everything else is
+   downstream.~~ Wrong — see the correction in §5.
 2. **The spawn's ambient contract** (§3) — the real shape of the
-   "pluggable execution" problem, bigger than `command`/`args`.
+   "pluggable execution" problem, bigger than `command`/`args`. Note the
+   spike made this less urgent: under daemon-alongside it does not arise.
 3. **`requirePrimaryHostId` as an implicit default** (§1a/1b) — cheap to
    fix, and every one of those call sites is a wrong answer the moment a
    second host exists.

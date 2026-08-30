@@ -447,3 +447,110 @@ mid-turn still has nowhere to resume *to* without new plumbing here.
   committing/pushing before a host is allowed to be torn down (closing the
   uncommitted-changes gap) rather than solving true mid-session
   portability.
+
+---
+
+## 8. Spike results: the §6 container recipe, actually run (2026-08-30)
+
+§6 was written without Docker access. It has now been executed end to end on
+macOS/OrbStack against a local dev bb server. **One of its central claims was
+wrong**, and two new findings came out of it.
+
+Terminology note: what §3 called "run bb's own host daemon *inside* the
+sandbox" is better called **daemon alongside** — the property that matters is
+that the daemon and the agent share one execution environment, not that
+anything is nested. The contrast is **daemon across** (daemon on one side of a
+boundary, agent on the other).
+
+### 8a. Native add-ons: only `node-pty` lacks a prebuilt
+
+§6's open question is answered, and the guess was wrong about *which* image is
+affected. This is not alpine/musl-specific — it hits plain
+`node:22-bookworm-slim`, and it is exactly one module:
+
+| module | on Debian slim, no compiler |
+| --- | --- |
+| `better-sqlite3` | prebuilt, loads fine |
+| `@parcel/watcher` | prebuilt, loads fine |
+| `node-pty` | **install fails**, node-gyp source build, needs Python |
+
+Adding `python3 make g++` fixes it. Costs:
+
+| image | size |
+| --- | --- |
+| `node:22-bookworm-slim` | 347MB |
+| \+ curl, ca-certificates, git | 484MB |
+| \+ python3, make, g++ | **841MB** |
+
+The compile itself is cheap — `npm install -g bb-app` takes 8–12s with the
+toolchain present. The cost is the permanent +357MB, and it cannot be
+multi-staged away: `install-machine.sh:375` installs the *server's*
+`bb-app.tgz` at container run time, so the rebuild happens per-container.
+
+`node-pty` exists for terminals. A disposable sandbox nobody opens a terminal
+in carries a C++ toolchain for a feature it never uses — the first concrete
+argument that **terminals should be a declarable environment capability**
+rather than an assumed one.
+
+### 8b. `BB_INSTALL_SKIP_SERVICE=1` does NOT leave a running daemon
+
+§6 claimed the flag leaves "the temporary joined daemon process running …
+the daemon just runs as (or under) the container's main process and
+`docker stop`/`docker rm` is the teardown." **This is false.**
+
+Observed twice: the script prints `Joined successfully` and
+`Service installation skipped; daemon PID 201 is still running`, then **exits
+0**. The daemon is a *child* of the install script, not the container's main
+process. When the script returns, PID 1 exits, Docker tears down the
+container, and the daemon dies with it. `bb machine list` showed the host
+flip to `disconnected` immediately.
+
+The container recipe needs something to hold PID 1 open. Appending
+`&& tail -f /dev/null` was verified to work: host stayed `connected`.
+A real recipe should `exec` the daemon as PID 1 or run a supervisor.
+
+Corrected timing, clean run: **39s from `docker run` to `connected`.**
+
+### 8c. New leak: loopback hostname is a proxy for "same machine"
+
+`usesSecureInternalFetchTransport`
+([`apps/host-daemon/src/server-client.ts:206-222`](../../apps/host-daemon/src/server-client.ts))
+accepts `https:`, or a hostname of literally `127.0.0.1` / `localhost` /
+`::1`. A daemon in a container must address the server as
+`host.docker.internal` — inside the container, `localhost` is the container.
+So a containerized daemon **cannot satisfy this over HTTP**, even when the
+traffic provably never leaves the machine.
+
+`protocol-self-update.ts:182` checks transport *before* it checks versions
+and returns `"failed"`; the daemon then loops `Waiting for server...` and
+never connects. So on any non-HTTPS server, a containerized daemon that hits
+a protocol mismatch is permanently wedged.
+
+This belongs in the survey's §1 class (server/daemon co-location), and is
+worse than the others because the assumption sits inside a *security*
+decision. Related to §5 finding #4 but a distinct mechanism: that one is
+"self-update exits expecting a supervisor," this one is "refuses to update
+and never connects." Latent in production (real servers are HTTPS); fatal
+for containers against a local or LAN HTTP server.
+
+### 8d. Bootstrap: binaries yes, credentials no
+
+The container is born empty — all four providers report
+`installed: false`. But bb tracks this per host and can fix half of it
+itself: `bb machine provider-cli install <host> codex` installed codex
+0.151.0 into the container in **11s**, driven entirely from the server.
+
+What it cannot do is sign in. `~/.codex/auth.json` does not exist
+afterwards, and the provider's own hint is "Run `codex` on the machine to
+sign in" — a human step, per machine. So §6's per-host bootstrap gap is
+narrower than assumed for binaries and completely open for credentials.
+
+### 8e. Incidental
+
+- `@parcel/watcher` works in a container. §4 called file watching the
+  hardest subsystem to make remote; under daemon-alongside it is free.
+- OrbStack bridges host loopback, so `host.docker.internal:PORT` reached a
+  `127.0.0.1`-bound dev server. Do not generalize — on plain dockerd this
+  would need `BB_SERVER_BIND_HOST=0.0.0.0`.
+- The dev server builds `/install/bb-app.tgz` on demand: 39s cold, 36MB.
+- `bb machine remove` requires `--yes` non-interactively.
