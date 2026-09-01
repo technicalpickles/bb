@@ -202,6 +202,50 @@ absolute path we did not see in the first 40 lines. Then full-fidelity
 resume needs per-provider rewriting, not just path discipline, and the cost
 of every non-`process`-tier runtime goes up sharply.
 
+**Result (2026-08-31), from a real thread's actual session file, not the
+format read cold:** partially falsified — real content beats absence.
+
+Ran a live two-turn thread (`claude-code` provider) against a throwaway git
+workspace through the dev app (`scripts/bb-dev-app`, not the packaged
+build), then read the Claude Code CLI session file it produced
+(`~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`, 22 lines) instead of
+reading the format cold. Every per-turn record does carry `cwd` and nothing
+else worrying at the top level — no hostname, no machine id, no absolute
+path to a node/claude binary.
+
+But the transcript also holds an `attachment` record with
+`type: "sandbox_instructions"` — the same sandbox filesystem-policy block
+visible to every interactive session, captured verbatim into the harness's
+own history. It embeds dozens of this account's absolute paths (`~/.cache/*`,
+`~/.config/*`, `~/.claude/*`, tool caches) and, more pointedly,
+`/private/var/folders/w0/tl09v7dd22q5pn96nbf2btjw0000gn` — confirmed via
+`getconf DARWIN_USER_TEMP_DIR` to be the live `DARWIN_USER_TEMP_DIR`, which
+is derived from the account's UUID and — per this account's own sandbox-paths
+note — "changes on a different Mac or a recreated account." That is not
+`cwd`. It is a literal account/machine fingerprint, and on another machine
+it would be **wrong**, not just irrelevant: the model would be told a temp
+directory is writable when the path doesn't exist there at all.
+
+Other `attachment.type` values in the same transcript
+(`hook_additional_context`, `mcp_instructions_delta`, `skill_listing`) are
+similarly account-personalized — tied to this account's global
+`~/.claude/CLAUDE.md`, MCP config, and skill set, not the workspace. Whether
+any of this actually breaks a resumed turn (versus the model just getting
+corrected on the next real sandbox violation) was not tested — the second
+half of the probe's method, copying to a genuinely separate machine and
+resuming, still wasn't run. A Docker container wouldn't isolate this
+variable cleanly anyway, since it would have neither this account's sandbox
+policy nor its credentials to compare against. What changed is the *kind* of
+evidence: the doc's "reading two session formats and finding only `cwd`" was
+an argument from absence; this is presence of a real fingerprint, one
+severity level below "resume doesn't work." C3 should read "cwd, plus
+whatever the harness's own context-injection features stamp into every
+session" rather than "cwd only."
+
+Separately: bb's own `thread-storage/thr_2vk4mz4z5d/` directory was empty
+for this thread — no bb-side data supplements the harness session file for
+this provider. Whatever moves, moves entirely as the CLI's own JSONL.
+
 ### P4 — What does the UI actually do when a host vanishes mid-turn? (C5, cheap, local)
 
 **Why:** "lists look fine, clicking 404s" is inferred from reading
