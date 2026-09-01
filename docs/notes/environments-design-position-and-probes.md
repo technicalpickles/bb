@@ -263,6 +263,47 @@ differ (`DAEMON_ACTIVE_WORK_DISCONNECT_GRACE_MS` vs
 **Falsifies if:** it degrades gracefully already, in which case
 lifecycle-autonomy is a smaller problem than claimed and drops down the list.
 
+**Result (2026-08-31), a real enrolled container, real `docker kill`, not
+inferred from code:** partially confirmed, one layer worse than "lists look
+fine, clicking 404s" suggested — the staleness reaches the thread detail
+view itself, not just an index.
+
+Built the §8 spike image (`node:22-bookworm-slim` + the toolchain P1 already
+showed is mandatory), enrolled it against the dev app with
+`BB_INSTALL_SKIP_SERVICE=1` (39s to `connected`, matching §8b), created a
+project/environment on it, and got one thread to actually spawn by passing
+`--model` explicitly — the default-model-resolution path 503s before a
+thread even exists if the provider health check hasn't passed, so an
+unauthenticated container can't reach "running" through the normal path at
+all. That thread errored on auth within about a second (expected — no
+Keychain, no credentials file in a fresh container, the same wall P2 hit),
+so **the active-work grace path
+(`DAEMON_ACTIVE_WORK_DISCONNECT_GRACE_MS` = 30s,
+`hostReconnectGraceExpiresAt`) could not be exercised** — that needs a
+genuinely in-flight turn, which needs the same live provider credentials
+this investigation has twice now declined to spend. Idle only.
+
+What idle *did* show, `docker kill`, then polled every 1–2s:
+
+- **`bb machine show` flips `connected` → `disconnected` in about a
+  second** — not gated by either grace constant. Those constants turned out
+  to govern how a thread with active work waits before reacting to a
+  disconnect, not how fast the raw connectivity signal itself updates.
+- **`bb environment status` on that host's environment returns a clean
+  `HTTP 502: Host is not connected`** the instant the host is down — the
+  doc's predicted "404 destroyed vs 502 disconnected, distinct payloads"
+  is real and working exactly as described, for this environment endpoint.
+- **But `bb thread show`'s embedded `environment` object — the same data a
+  thread detail page would render a status badge from — kept reporting
+  `"status": "ready"`**, unchanged, after the host had been `disconnected`
+  for well over a minute. Querying the *same environment ID* through the
+  dedicated status endpoint 502s immediately; querying it as a side-object
+  on the thread returns a stale success. The doc's "lists look fine until
+  you click" undersold it slightly: this isn't a list failing to join to
+  host state, it's the thread's own detail payload — what you're looking
+  at when you've already clicked — carrying a snapshot that direct query
+  on the identical ID contradicts.
+
 ### P5 — Daytona pause/resume with a live enrolled daemon (C2, needs credits)
 
 **Why:** the single highest-value probe, and the only one that cannot be done
