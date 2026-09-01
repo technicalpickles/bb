@@ -120,6 +120,23 @@ tolerates a missing PTY or only the installer does.
 terminal request. Then terminals are load-bearing infrastructure, not a
 capability, and the axis loses a value.
 
+**Result (2026-08-31), via source reading, not an actual image build:**
+falsified, more strongly than the probe expected. `node-pty` is a plain
+`dependencies` entry (not `optionalDependencies`) in both
+`apps/host-daemon/package.json` and `packages/bb-app/package.json`.
+`terminal-manager.ts:6` does a static `import { spawn as spawnPty } from
+"node-pty"`, and its exported `TerminalManager` class is imported as a
+*value* (not `type`) at `app.ts:27` — a plain top-level import, evaluated
+eagerly. Node's module graph loads and executes every imported module before
+the importing module's own top-level code runs, so `node-pty`'s native
+binding loads at daemon process start, before any terminal is ever
+requested. This isn't just the installer's explicit `require()` check
+(`install-machine.sh`) being overzealous — the daemon binary itself cannot
+reach a running state without `node-pty` loading successfully. Making
+"interactive surfaces" a real declarable capability needs `terminal-manager.ts`
+rewritten to load `node-pty` lazily (dynamic `import()` on first terminal
+request), not just a relaxed installer.
+
 ### P2 — Does an injected API key actually work, end to end? (C4, cheap, local)
 
 **Why:** credential acquisition is the axis with no answer, and the whole
@@ -136,6 +153,38 @@ Repeat per provider — they will not behave the same.
 substitute for, or bb has no path to get an env var to the provider process
 at all. Then `injected` is not a real value and every runtime that cannot
 inherit credentials from a host needs something bb does not have.
+
+**Result (2026-08-31), via source reading — the live-turn half is still
+open:** the probe bundled two separable questions with different answers.
+
+*Does bb's plumbing deliver an injected env var to the provider process at
+all?* Yes. `runtime-provider-process.ts:372-376` builds the child env as
+`sanitizeInheritedChildProcessEnv({env: process.env})` merged with
+`args.env` and `processConfig.env`. `sanitizeInheritedChildProcessEnv`
+(`packages/process-utils/src/index.ts:449-466`) strips only `NODE_ENV` and
+`BB_*` — everything else, `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` included,
+passes straight through from the daemon's own process environment. There is
+no dedicated "inject a credential" command in bb; `injected` in practice
+means "set it on the daemon process's environment before it starts."
+
+*Does bb's own readiness check ever look at that env var?* No, for either
+provider inspected. `provider-claude-code/.../provider-maintenance.ts:260-274`
+reads OAuth credentials only from the macOS Keychain (`security
+find-generic-password`) or `~/.claude/.credentials.json`.
+`provider-codex/.../codex-auth.ts:128-146` reads only `~/.codex/auth.json` —
+and even that file's API-key path is a JSON field (`OPENAI_API_KEY` inside
+the file), never `process.env`. Neither provider's health check consults the
+environment at all, so both would report `"unauthenticated"` regardless of
+an injected key. No code path was found gating turn-start on that health
+status (only two provider-maintenance modules reference
+`"unauthenticated"`), so this is plausibly cosmetic — but that inference is
+argument-from-absence, the same weak evidence type C3 already flagged.
+
+**Still open:** whether the `claude` / `codex` CLI binaries themselves accept
+the env var for a real non-interactive turn. `claude` is installed locally
+(2.1.251); `codex` is not. This needs an actual API call against a real key
+to answer, which weakens "cheap, local" — flagging it for a deliberate go/no-go
+rather than just spending it.
 
 ### P3 — Move a live session to another machine at the same path (C3, cheap, local)
 
