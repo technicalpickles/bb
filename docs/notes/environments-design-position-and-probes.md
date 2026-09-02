@@ -401,19 +401,78 @@ primitive and the server *does* accept a supplied `hostId` — but it is
 also not yet proven, because the reclaim path has never been exercised,
 only found unused via grep.
 
-**Still open, and cheap:** an actual test — mount a bb daemon's data dir on
-a Docker named volume (mirroring the Coder validation's setup exactly,
-swap `codercom/enterprise-base` for a bb-installed image), enroll, `docker
-kill`, start a fresh container with the same volume attached, confirm the
-daemon reconnects as the same host with zero manual intervention (the
-"data dir survived" case — code reading says this should just work). Then,
-separately, delete the volume too and manually drive the
-`hosts/enroll-key`-with-explicit-`hostId` path found above, to check
-whether that escape hatch actually functions for "data dir did not
-survive" or breaks on first real use (a stale `hostKey` still cached
-somewhere, an environment row that still points at the orphaned host, a
-live session lease that never got torn down). Neither has been run against
-a real daemon yet — this result is source-only, same caveat as P1.
+**Result (2026-09-02), against a real daemon and a real dev server, not
+just source reading:** confirmed for the "data dir survives" case, with one
+real orchestration gap found along the way that source reading alone would
+not have surfaced.
+
+Method: built the §8 spike image (`node:22-bookworm-slim` + the toolchain
+P1 already showed is mandatory), created a Docker named volume, ran a
+container with `BB_DATA_DIR` pointed at that volume, and enrolled it
+against the local dev server (`scripts/bb-dev-app`) via a real join
+code/hostId pair minted through `POST /hosts/join-codes`. Confirmed
+`connected` (`host_j7ar5b3aem`), with `auth.json`/`host-id` written onto
+the volume. Then `docker kill` + `docker rm` — container fully gone, host
+flipped to `disconnected` within seconds, matching P4. Waited 45s (past the
+30s active-work grace window). Started a **second, brand-new container**
+(different container ID) with the same volume attached, same `--host-id`,
+and deliberately reused the **already-exhausted** join code from round one
+(single-use, `remaining: 1`, already spent) to make the test strict: if the
+reclaim depended on the join code at all, this run would fail.
+
+It didn't. `install-machine.sh` printed `This machine is already joined to
+http://host.docker.internal:20470 as host_j7ar5b3aem` — the join code was
+never touched, exactly matching `auth_matches_host()`'s short-circuit found
+in the source read. But the host stayed `disconnected` — because in the
+`already_joined=yes` branch, `install-machine.sh` never sets `$join_pid`
+(that only happens inside the `if [ "$already_joined" = no ]` block), so
+under `BB_INSTALL_SKIP_SERVICE=1` it prints `Service installation
+skipped.` and exits **without starting a daemon process at all**. This is
+correct behavior for its actual use case — a real reinstall/upgrade of a
+machine that already has a persistent systemd/launchd service managing the
+daemon — but it's a real gap for a disposable-container recipe, where
+there is no service and nothing else will start the daemon.
+
+Worked around it by invoking the daemon directly:
+`BB_DATA_DIR=/data bb-app host-daemon join --host-daemon-port <port>
+--host-id host_j7ar5b3aem --server-url <url>`, **no join code at all**.
+Log: `Connected to server {"sessionId":"hses_bgmcp94bvi"}`, then `Host
+daemon started {"identity":{"hostId":"host_j7ar5b3aem", ...}}`.
+`bb machine list` immediately after showed exactly one row for
+`host_j7ar5b3aem`, now `connected` — not a second row, not a duplicate.
+That's the core C6 claim, confirmed against a live server: a persisted
+credential on a volume that outlives the container is sufficient, with the
+existing `upsertHost`-keyed-on-`hostId` mechanism, no new server protocol.
+Cleaned up: host removed via `DELETE /hosts/:id`, container/volume/image
+removed, scratch files deleted.
+
+**So, precisely:** C6's core mechanism is not just unfalsified, it is now
+demonstrated end to end. The gap is not in the daemon/server protocol —
+it's one level up, in `install-machine.sh`'s assumption that "already
+joined" implies "something else is already running the daemon." Any real
+recipe for daemon-alongside-in-disposable-compute needs either a fix to
+that script (start the daemon in the `already_joined` branch too, at least
+under `BB_INSTALL_SKIP_SERVICE=1`) or a container entrypoint that calls
+`host-daemon join` directly instead of going through the installer's full
+provisioning path every time.
+
+**Still open:** the "data dir did **not** survive" case — deleting the
+volume too and manually driving the `hosts/enroll-key`-with-explicit-
+`hostId` path (found via grep, never called anywhere in the repo) to see
+whether a genuinely fresh identity can reclaim an old `hostId` on request,
+or whether that breaks on first real use (a stale environment row still
+pointing at the orphaned host, a live session lease never torn down).
+Not attempted this session.
+
+**Incidental:** `pnpm run bb:dev -- <command> <positional> --<flag>` fails
+across multiple unrelated CLI commands (`machine join-code --json`,
+`machine show <id> --json`, `machine remove <id> --yes`) with `error: too
+many arguments for '<command>'. Expected N but got N+1` — a flag following
+a positional argument is miscounted as an extra positional. Worked around
+it by calling the HTTP API directly (`POST /hosts/join-codes`,
+`DELETE /hosts/:id`) instead of the CLI. Not investigated further; flagging
+it here since it blocked routine CLI use during this probe and would
+affect anyone else scripting against `bb:dev`.
 
 ### Ordering
 
