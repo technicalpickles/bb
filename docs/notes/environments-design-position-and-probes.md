@@ -456,13 +456,41 @@ under `BB_INSTALL_SKIP_SERVICE=1`) or a container entrypoint that calls
 `host-daemon join` directly instead of going through the installer's full
 provisioning path every time.
 
-**Still open:** the "data dir did **not** survive" case — deleting the
-volume too and manually driving the `hosts/enroll-key`-with-explicit-
-`hostId` path (found via grep, never called anywhere in the repo) to see
-whether a genuinely fresh identity can reclaim an old `hostId` on request,
-or whether that breaks on first real use (a stale environment row still
-pointing at the orphaned host, a live session lease never torn down).
-Not attempted this session.
+**The "data dir did not survive" case, answered same day:** ran it for
+real too. Enrolled a fresh host (`host_dvdxcu46hf`), confirmed `connected`,
+then `docker kill` + `docker rm` **and** `docker volume rm` — container and
+volume both gone, no credential surviving anywhere. Confirmed
+`disconnected`. Then called the previously-unused escape hatch directly:
+`POST /internal/hosts/enroll-key` with `{"hostId": "host_dvdxcu46hf"}` —
+this route is loopback-only (`assertLoopbackRequest`) but otherwise
+unguarded, and worked on the first call, returning a fresh `bbde_` join
+code scoped to the old `hostId` with no complaint about the host being
+disconnected or the prior key being gone. Used that key on a **brand-new
+container with a brand-new, never-before-seen volume** — no residue from
+the original enrollment anywhere — and it joined cleanly as
+`host_dvdxcu46hf`. `bb machine list` showed exactly one row, `connected`,
+no duplicate. Also created a real project (`POST /projects`, `local_path`
+source pointed at the reclaimed host) to confirm the practical
+consequence: source routing to a reclaimed `hostId` just works, because
+nothing else in the model was ever keyed on the compute instance, only on
+`hostId` — which is exactly why this worked without touching
+`Environment.hostId` at all.
+
+So the full C6 claim now stands on two live tests, not source reading: a
+persisted credential reconnects automatically when the data dir survives,
+and — via a real but entirely unwired-up internal route — an operator can
+manually reissue a fresh credential for an old `hostId` even when nothing
+survives at all. Neither path needed any new server code. The gap in both
+cases is orchestration and UX, not protocol: `install-machine.sh` doesn't
+start the daemon on the already-joined fast path (previous result, above),
+and nothing in the CLI or web UI exposes "get a new join code for this
+specific existing host" — the loopback restriction on
+`/internal/hosts/enroll-key` means it would need a proper authenticated
+route (or a CLI subcommand that runs on the server's own machine) before
+it could be offered as a real "recover this host" action.
+
+Cleaned up: project and host both deleted via the API, container/volume/
+image removed, scratch files deleted.
 
 **Incidental:** `pnpm run bb:dev -- <command> <positional> --<flag>` fails
 across multiple unrelated CLI commands (`machine join-code --json`,
