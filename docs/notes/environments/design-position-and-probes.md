@@ -63,9 +63,13 @@ to not have.
 
 **Liveness is a property of requests, not entities.** The request layer is
 good — 404 destroyed vs 502 disconnected, with distinct payloads. Nothing
-upstream knows: `listEnvironments` has no join to hosts, `ThreadStatus` has
-no "host gone" value, `Environment.hostId` is immutable. The staleness
-reaches further than a list that looks fine until you click, too — a
+upstream knows:
+
+- `listEnvironments` has no join to hosts
+- `ThreadStatus` has no "host gone" value
+- `Environment.hostId` is immutable
+
+The staleness reaches further than a list that looks fine until you click, too — a
 thread's own detail payload (the embedded `environment` object a status
 badge would render from) can keep reporting a live status for over a
 minute after the host actually went `disconnected`, while the dedicated
@@ -391,8 +395,8 @@ convention.
 **Result (2026-09-02), via source reading, not a live container test:**
 partially confirmed, with the gap narrower and more specific than expected.
 
-*The "same process restarts" case already works, exactly like the design
-doc's staleness section implies it should for a laptop that comes back.*
+**The "same process restarts" case already works, exactly like the design
+doc's staleness section implies it should for a laptop that comes back.**
 `install-machine.sh` picks a fixed data directory
 (`$HOME/.bb-machines/<server-host>`, overridable via `BB_DATA_DIR` —
 `install-machine.sh:174`). First enrollment mints a `hostId`
@@ -413,8 +417,8 @@ host-removal route. So a daemon that reconnects with its original
 new protocol — this is bb's already-exercised restart/reconnect path, not
 a gap.
 
-*The gap is narrower than "no mechanism exists" — it's that nothing ever
-threads a prior `hostId` back through re-enrollment on recreated compute.*
+**The gap is narrower than "no mechanism exists" — it's that nothing ever
+threads a prior `hostId` back through re-enrollment on recreated compute.**
 When `auth.json` is absent (a fresh container, empty volume), the daemon
 takes the first-enrollment branch unconditionally
 (`start-host-daemon.ts:112-127`) and, absent an explicitly supplied
