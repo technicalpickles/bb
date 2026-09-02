@@ -55,6 +55,14 @@ Callers that silently mean "primary host" when no host is specified:
 - [`services/system/usage-limits.ts:21`](../../apps/server/src/services/system/usage-limits.ts)
 - [`services/ai/inference.ts:261`](../../apps/server/src/services/ai/inference.ts)
 
+**Update (2026-09-02):** C6/P6 in
+[design-position-and-probes.md](design-position-and-probes.md) found this is
+the same underlying gap as the host-identity-reclaim mechanism, wearing a
+different symptom — both are "nothing gives a host a first-class,
+reconcilable identity beyond an implicit single-host assumption."
+`project:bb` task 492 tracks designing a fix for both together rather than
+as two patches that each touch the `hosts` table.
+
 ### 1b. Server-side inference runs on the primary host, not the thread's host
 
 `inference.ts:261` calls `requireConnectedPrimaryHostId(deps)` and RPCs the
