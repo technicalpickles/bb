@@ -176,7 +176,7 @@ forces the entity layer to grow what the request layer already has.
   process* on recreated compute can prove it's a continuation of a
   previously-enrolled host rather than a brand-new one. **Confirmed
   2026-09-02** by P6/C6 in
-  [environments-design-position-and-probes.md](environments-design-position-and-probes.md)
+  [design-position-and-probes.md](design-position-and-probes.md)
   against two live containers: the mechanism already exists end-to-end
   (`upsertHost` keyed on `hostId`, plus a previously-unwired
   `POST /internal/hosts/enroll-key` reclaim path) and needs no new server
