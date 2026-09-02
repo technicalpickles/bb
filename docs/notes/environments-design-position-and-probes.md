@@ -76,7 +76,7 @@ ambient contract. Current lean is alongside, spike-verified at 39s from
 
 ## Part 2: What the design rests on
 
-Five load-bearing claims. If any is false, the design changes shape.
+Six load-bearing claims. If any is false, the design changes shape.
 
 - **C1 — Daemon-alongside is sufficient.** Every motivation (isolation,
   capacity, reproducible toolchain, detached) is satisfiable without ever
@@ -94,6 +94,13 @@ Five load-bearing claims. If any is false, the design changes shape.
 - **C5 — Capabilities can be declared per-runtime without forking the core.**
   bb's subsystems can consume a declaration rather than branching on runtime
   identity.
+- **C6 — Host identity can survive compute recreation via a persisted
+  credential, with no new server protocol.** Added 2026-09-02, after the
+  Coder validation surfaced that bb's daemon already separates a durable
+  host credential from ephemeral session state — the open question is
+  whether putting that credential on durable storage is *sufficient*, or
+  whether the server needs new reconciliation logic beyond what exists
+  today (`upsertHost` keyed on `hostId`).
 
 ---
 
@@ -326,13 +333,98 @@ filesystem for free but still need reconnection logic, and possibly all of
 C3's path-identity machinery anyway. This is the result that would most
 change the design, which is why it is worth spending credits on.
 
+### P6 — Does a persisted credential alone let recreated compute reclaim its host identity? (C6, cheap, local)
+
+**Why:** the Coder runtime validation (`environment-capability-model.md`,
+"Runtime validation 2") found that Coder's own agent survives container
+destroy/recreate by keeping its identity token outside the container's
+lifecycle, and flagged this as a property bb's own daemon/server pairing
+might or might not already have. It looked, from the outside, like exactly
+the mechanism the staleness section describes as missing.
+
+**Method:** read `apps/host-daemon/src/start-host-daemon.ts`,
+`identity.ts`, `auth-state.ts`, and the server's
+`apps/server/src/internal/{hosts,session}.ts` and
+`packages/db/src/data/hosts.ts`, rather than build anything first — this is
+answerable from source before it needs a container.
+
+**Falsifies if:** the daemon's persisted credential is derived from
+something that doesn't survive being written to and read back from a
+volume (a hardware ID, a container-assigned hostname), so persisting the
+data dir alone wouldn't be sufficient — or if the server's `upsertHost` path
+requires anything beyond a matching `hostId` (e.g. a hostType or session
+state check that only holds for same-process restarts, not cross-container
+ones) — meaning C6 needs new server protocol, not just a storage
+convention.
+
+**Result (2026-09-02), via source reading, not a live container test:**
+partially confirmed, with the gap narrower and more specific than expected.
+
+*The "same process restarts" case already works, exactly like the design
+doc's staleness section implies it should for a laptop that comes back.*
+`install-machine.sh` picks a fixed data directory
+(`$HOME/.bb-machines/<server-host>`, overridable via `BB_DATA_DIR` —
+`install-machine.sh:174`). First enrollment mints a `hostId`
+(`identity.ts:44`, `randomUUID()` — not derived from any machine fact) and a
+non-expiring `hostKey` (`DAEMON_HOST_CONFIG_ID`, no `keyExpiration` —
+`machine-auth.ts:147-153`), persisted to `<dataDir>/host-id` and
+`<dataDir>/auth.json` (`identity.ts:57-80`, `auth-state.ts:32-52`, mode
+`0o600`). Every subsequent boot reads `auth.json`
+(`start-host-daemon.ts:77`) and, if present, **reuses it unconditionally**
+and skips enrollment entirely (`start-host-daemon.ts:109-110`). Server-side,
+both the enroll route and the per-connection `session/open` route call
+`upsertHost(deps.db, deps.hub, { id: hostId, ... })`
+(`hosts.ts:101-106`, `session.ts:91-96`), which is a plain
+insert-or-update keyed on `id` (`packages/db/src/data/hosts.ts:57-107`) —
+`destroyedAt` is untouched by connect/disconnect, only set by the explicit
+host-removal route. So a daemon that reconnects with its original
+`auth.json` is recognized as the *same* host row already, today, with no
+new protocol — this is bb's already-exercised restart/reconnect path, not
+a gap.
+
+*The gap is narrower than "no mechanism exists" — it's that nothing ever
+threads a prior `hostId` back through re-enrollment on recreated compute.*
+When `auth.json` is absent (a fresh container, empty volume), the daemon
+takes the first-enrollment branch unconditionally
+(`start-host-daemon.ts:112-127`) and, absent an explicitly supplied
+`--host-id`/`BB_HOST_ID`, `identity.ts:44` mints a **new random `hostId`**.
+Server-side, `issuePersistentHostEnrollKey`
+(`apps/server/src/services/hosts/host-enrollment.ts:11-24,15`) mirrors
+this: `args.hostId ?? createHostId()` — it *can* accept a caller-supplied
+`hostId` and re-mint an enroll key scoped to an existing host, and
+`hosts/enroll-key` accepts an optional `hostId` (`hosts.ts:68`), but no CLI
+or UI code path in the repo actually calls it that way. The mechanism for
+C6 already exists end-to-end in the API; it has simply never been wired to
+anything that would use it for "compute got recreated, reclaim identity
+X." So C6 is not falsified — the credential *is* the right durable
+primitive and the server *does* accept a supplied `hostId` — but it is
+also not yet proven, because the reclaim path has never been exercised,
+only found unused via grep.
+
+**Still open, and cheap:** an actual test — mount a bb daemon's data dir on
+a Docker named volume (mirroring the Coder validation's setup exactly,
+swap `codercom/enterprise-base` for a bb-installed image), enroll, `docker
+kill`, start a fresh container with the same volume attached, confirm the
+daemon reconnects as the same host with zero manual intervention (the
+"data dir survived" case — code reading says this should just work). Then,
+separately, delete the volume too and manually drive the
+`hosts/enroll-key`-with-explicit-`hostId` path found above, to check
+whether that escape hatch actually functions for "data dir did not
+survive" or breaks on first real use (a stale `hostKey` still cached
+somewhere, an environment row that still points at the orphaned host, a
+live session lease that never got torn down). Neither has been run against
+a real daemon yet — this result is source-only, same caveat as P1.
+
 ### Ordering
 
-P1–P4 are local, need no accounts, and together test four of the five claims.
-P5 needs Daytona credits and tests the one claim that would most expensively
-be wrong. Doing P1–P4 first is not deferring P5 — it is arriving at P5 already
-knowing what a healthy enroll/kill/resume cycle looks like locally, which is
-what makes a Daytona result interpretable rather than ambiguous.
+P1–P4 are local, need no accounts, and together test four of the five
+original claims. P6 is likewise local and cheap, and was answered the same
+way — source reading, no container needed for the first half of the
+question. P5 needs Daytona credits and tests the one claim that would most
+expensively be wrong. Doing P1–P4 and P6 first is not deferring P5 — it is
+arriving at P5 already knowing what a healthy enroll/kill/resume cycle
+looks like locally, which is what makes a Daytona result interpretable
+rather than ambiguous.
 
 ---
 
@@ -347,6 +439,14 @@ host exists. Four call sites default to it silently. The worst is server-side
 inference, which generates thread titles and commit messages for a thread
 running on host B using **host A's** credentials. Independent of the
 capability model, cheap, and wrong today on any multi-host setup.
+
+Worth noting after P6: this and the staleness problem are the same
+underlying gap wearing two different symptoms. `requirePrimaryHostId`
+assumes there is one obvious host because nothing ever gave hosts a
+first-class, reconcilable identity; the staleness problem's "nowhere to
+move to" is the same absence viewed from the environment side. A real fix
+for either should probably be designed as one identity-model pass, not two
+separate patches that end up touching the same `hosts` table twice.
 
 ---
 
