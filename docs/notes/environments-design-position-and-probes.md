@@ -66,6 +66,24 @@ no "host gone" value, `Environment.hostId` is immutable. Hence lists that
 look fine until you click. Correct behavior when a host is a laptop that
 comes back; wrong when it is a container that never will.
 
+**Confirmed and sharpened by P4 (2026-09-02):** the staleness reaches
+further than "lists look fine until you click." A thread's own detail
+payload — the embedded `environment` object a status badge would render
+from — kept reporting a live status for over a minute after the host had
+gone `disconnected`, while the dedicated status endpoint for the identical
+ID 502'd immediately. What you're looking at once you've already clicked
+can itself be wrong, not just the list you clicked from.
+
+**What P6 changes about urgency:** state portability (C3) and identity
+persistence (C6) looked like separate problems on separate axes. P6 showed
+they're closer than that — a good chunk of what "the machine is gone"
+needs, reconnecting to the same logical entity, already works today with
+zero new server code, just unwired orchestration. That doesn't remove the
+C3 case (uncommitted workspace changes and harness session content still
+need their own answer), but the identity half of the staleness problem is
+now a wiring task (fix `install-machine.sh`, add a CLI/UI surface for
+`enroll-key`), not a design problem waiting on an architecture decision.
+
 **Daemon alongside vs across.** Alongside = daemon and agent share one
 execution environment, so git, watcher, PTY, and the spawn contract are all
 untouched. Across = cheaper per environment, but re-plumbs the spawn's
@@ -84,10 +102,15 @@ Six load-bearing claims. If any is false, the design changes shape.
 - **C2 — Process-tier durability makes state portability unnecessary.** A
   runtime that freezes and resumes with memory intact needs none of bb's
   state machinery, *including* an enrolled daemon surviving the freeze.
-- **C3 — Without process-tier, path identity is the whole unlock.** Both
-  harnesses pin sessions to an absolute `cwd` and nothing else
-  machine-specific, so a canonical workspace path makes session state
-  portable by file copy.
+- **C3 — Without process-tier, path identity is most of the unlock, but not
+  all of it.** Both harnesses pin sessions to an absolute `cwd`, so a
+  canonical workspace path makes session state portable by file copy —
+  confirmed against a real session file by P3 (2026-09-02). But the same
+  transcript also carries account/machine-fingerprint data the harness
+  stamps into context (sandbox policy paths, global config, MCP/skill
+  listings) that would be *wrong*, not just irrelevant, on another machine.
+  Full-fidelity resume needs path identity plus harness context regenerated
+  per-machine, not path identity alone.
 - **C4 — Credentials are the hard axis.** bb can install binaries remotely
   but not sign them in, and this is what makes N ephemeral environments
   painful.
@@ -95,12 +118,20 @@ Six load-bearing claims. If any is false, the design changes shape.
   bb's subsystems can consume a declaration rather than branching on runtime
   identity.
 - **C6 — Host identity can survive compute recreation via a persisted
-  credential, with no new server protocol.** Added 2026-09-02, after the
-  Coder validation surfaced that bb's daemon already separates a durable
-  host credential from ephemeral session state — the open question is
-  whether putting that credential on durable storage is *sufficient*, or
-  whether the server needs new reconciliation logic beyond what exists
-  today (`upsertHost` keyed on `hostId`).
+  credential, with no new server protocol.** Confirmed 2026-09-02 by P6,
+  against two live containers: a persisted `auth.json` on a surviving data
+  dir reconnects automatically through the existing
+  `upsertHost`-keyed-on-`hostId` path, and even a fully lost data dir can be
+  reclaimed via the previously-unwired `POST /internal/hosts/enroll-key`
+  route. Both gaps found are orchestration/UX (`install-machine.sh` not
+  starting a daemon on the already-joined path; no CLI/UI surface for
+  reissuing a credential), not protocol.
+
+  Not yet probed at all: **C1**. Every probe in this document ran
+  daemon-alongside because that's the only topology bb has, so C1 has never
+  been directly stress-tested against an alternative — it remains the one
+  claim resting purely on the original spike and the absence of a
+  motivation for daemon-across, not on a falsification attempt.
 
 ---
 

@@ -174,10 +174,18 @@ forces the entity layer to grow what the request layer already has.
   identity from the container's lifecycle. Orthogonal to state durability —
   it's not about what data survives, it's about whether a *freshly started
   process* on recreated compute can prove it's a continuation of a
-  previously-enrolled host rather than a brand-new one. bb has no mechanism
-  for this today; `Environment.hostId` is immutable and a vanished host has
-  nowhere to move to. Needs its own design pass before it becomes a tenth
-  axis rather than a one-off note.
+  previously-enrolled host rather than a brand-new one. **Confirmed
+  2026-09-02** by P6/C6 in
+  [environments-design-position-and-probes.md](environments-design-position-and-probes.md)
+  against two live containers: the mechanism already exists end-to-end
+  (`upsertHost` keyed on `hostId`, plus a previously-unwired
+  `POST /internal/hosts/enroll-key` reclaim path) and needs no new server
+  protocol. The mechanism itself doesn't need a design pass — what remains
+  is orchestration (`install-machine.sh` doesn't start a daemon on the
+  already-joined path) and exposing reclaim as a real, authenticated
+  CLI/UI action. `project:bb` task 492 tracks designing this together with
+  `requirePrimaryHostId`, since both are the same underlying "no first-class
+  reconcilable host identity" gap.
 - Whether a capability is gated by the runtime's engineering versus a given
   deployment's license tier (Coder's dormancy/auto-deletion are
   enterprise-only; self-hosted OSS gets `idle-stop` but not `idle-destroy`).
