@@ -42,13 +42,16 @@ runtime that declares different capabilities.
 
 Revised 2026-08-30 after the Daytona pass (below), which showed the first
 durability scale was too coarse and that two axes were missing entirely.
+The **state durability** and **persistence provider** values were then
+independently confirmed against a second, disjoint runtime by the Coder
+pass (2026-09-02, below) — see those two rows' notes.
 
 | Axis | Values | What exists today |
 |---|---|---|
 | **Process hosting** | `long-lived` · `oneshot` | The gate between alongside and across. Anything that can run a process supports alongside — bb's daemon dials *out*, so inbound reachability is not required. |
-| **State durability** | `none` · `filesystem` · `filesystem-offloaded` · `process` | **Nothing.** `hostTypeValues = ["persistent"] as const` — one value, and it is *named* persistent. |
+| **State durability** | `none` · `filesystem` · `filesystem-offloaded` · `process` | **Nothing.** `hostTypeValues = ["persistent"] as const` — one value, and it is *named* persistent. Both non-`process` tiers now have a live example: Daytona `stop` and Coder's Docker template land on `filesystem`, empirically confirmed for Coder by a real `coder stop`/`start` cycle. |
 | **Durable artifacts** | `snapshots` · `volumes` · none | **Nothing.** Things that outlive the machine itself and can seed a new one. |
-| **Persistence provider** | `self-managed` · `service-managed` | **Nothing.** Qualifies state durability: same capability, very different burden. Docker gives nothing unless you build it; a service may hand you the whole thing behind an API call. |
+| **Persistence provider** | `self-managed` · `service-managed` | **Nothing.** Qualifies state durability: same capability, very different burden. Docker gives nothing unless you build it; a service may hand you the whole thing behind an API call. Coder's stock Docker template landed squarely on `self-managed` — confirmed by killing the container and watching only the named-volume marker file survive — making it the clean opposite pole from Daytona's `service-managed` `pause`. |
 | **Workspace materialization** | `inherited` · `cloned` · `preexisting` | `project.clone` exists (`POST /projects/:id/sources`, `type: "clone"`) but is a manual call, never part of provisioning. No canonical-path convention. |
 | **Credential acquisition** | `inherited` · `injected` · `interactive` | **Nothing.** Binaries: `bb machine provider-cli install` works remotely, 11s. Credentials: `~/.codex/auth.json` never appears; the provider hint is literally "Run `codex` on the machine to sign in." |
 | **Interactive surfaces** | `terminal` · `port-exposure` · `editor-reach` | Terminal: works, costs +357MB for `node-pty` (§8a), so opt-in. Port exposure: `bb.hosts.declareSharedPorts` exists — but a runtime may bring its own, and then they compete. Editor: `remote-ssh` context exists, mapping hand-declared. |
