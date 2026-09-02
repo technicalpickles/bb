@@ -38,6 +38,10 @@ reading, as of 2026-09-02).
    built to falsify each one. Start here if you only read one file; it
    links back into the other four for evidence.
 
+Every doc above states current understanding only, not how it got there.
+[CHANGELOG.md](CHANGELOG.md) has the dated record of corrections and
+revisions, cross-referenced by doc and section.
+
 ## Status
 
 Nothing here is committed as a spec. Five of six probes (P1–P4, P6) are

@@ -1,14 +1,15 @@
 # Environment capability model (working draft)
 
-Where the container/remote-environments design has landed as of 2026-08-30.
-Not approved, not a spec — the shape we converged on after the survey and
-the container spike, written down so the next pass argues with it instead of
-rebuilding it.
+Where the container/remote-environments design has landed. Not approved,
+not a spec — the shape we converged on after the survey, the container
+spike, and two runtime validations, written down so the next pass argues
+with it instead of rebuilding it. See [CHANGELOG.md](CHANGELOG.md) for how
+it got here.
 
 Inputs:
 [host-locality-leaks-survey.md](host-locality-leaks-survey.md) (with its
 2026-08-30 corrections),
-[environments-remote-execution-research.md](environments-remote-execution-research.md)
+[remote-execution-research.md](remote-execution-research.md)
 §8 (the spike),
 [container-and-remote-environments.md](container-and-remote-environments.md).
 
@@ -40,11 +41,8 @@ runtime that declares different capabilities.
 
 ## The axes
 
-Revised 2026-08-30 after the Daytona pass (below), which showed the first
-durability scale was too coarse and that two axes were missing entirely.
-The **state durability** and **persistence provider** values were then
-independently confirmed against a second, disjoint runtime by the Coder
-pass (2026-09-02, below) — see those two rows' notes.
+See "Runtime validation 1: Daytona" and "Runtime validation 2: Coder" below
+for what's been confirmed against a live runtime versus read from source.
 
 | Axis | Values | What exists today |
 |---|---|---|
@@ -177,10 +175,9 @@ forces the entity layer to grow what the request layer already has.
   identity from the container's lifecycle. Orthogonal to state durability —
   it's not about what data survives, it's about whether a *freshly started
   process* on recreated compute can prove it's a continuation of a
-  previously-enrolled host rather than a brand-new one. **Confirmed
-  2026-09-02** by P6/C6 in
-  [design-position-and-probes.md](design-position-and-probes.md)
-  against two live containers: the mechanism already exists end-to-end
+  previously-enrolled host rather than a brand-new one. P6/C6 in
+  [design-position-and-probes.md](design-position-and-probes.md) confirmed
+  this against two live containers: the mechanism already exists end-to-end
   (`upsertHost` keyed on `hostId`, plus a previously-unwired
   `POST /internal/hosts/enroll-key` reclaim path) and needs no new server
   protocol. The mechanism itself doesn't need a design pass — what remains

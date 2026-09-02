@@ -1,16 +1,18 @@
 # Environments: where the design stands, and how to falsify it
 
-Written 2026-08-30, after the survey, the container spike, and one runtime
-validation pass. **Nothing here is committed.** The point of this document is
-to state the position cleanly enough that it can be attacked, and to list the
-cheapest experiments that would attack it.
+Started after the survey, the container spike, and the first runtime
+validation pass. **Nothing here is committed.** The point of this document
+is to state the position cleanly enough that it can be attacked, and to
+list the cheapest experiments that would attack it.
 
 The working notes accreted corrections in place and are hard to read straight
-through. This is the clean statement. Evidence lives in:
+through. This is the clean statement — it reflects current understanding
+only; see [CHANGELOG.md](CHANGELOG.md) for how it got here. Evidence lives
+in:
 
 - [host-locality-leaks-survey.md](host-locality-leaks-survey.md) — the leak survey
-- [environments-remote-execution-research.md](environments-remote-execution-research.md) — research, plus §8, the container spike
-- [environment-capability-model.md](environment-capability-model.md) — the axes and the Daytona pass
+- [remote-execution-research.md](remote-execution-research.md) — research, plus §8, the container spike
+- [environment-capability-model.md](environment-capability-model.md) — the axes and the runtime validations (Daytona, Coder)
 - [container-and-remote-environments.md](container-and-remote-environments.md) — the spawn-hook question
 
 ---
@@ -62,26 +64,24 @@ to not have.
 **Liveness is a property of requests, not entities.** The request layer is
 good — 404 destroyed vs 502 disconnected, with distinct payloads. Nothing
 upstream knows: `listEnvironments` has no join to hosts, `ThreadStatus` has
-no "host gone" value, `Environment.hostId` is immutable. Hence lists that
-look fine until you click. Correct behavior when a host is a laptop that
-comes back; wrong when it is a container that never will.
+no "host gone" value, `Environment.hostId` is immutable. The staleness
+reaches further than a list that looks fine until you click, too — a
+thread's own detail payload (the embedded `environment` object a status
+badge would render from) can keep reporting a live status for over a
+minute after the host actually went `disconnected`, while the dedicated
+status endpoint for the identical ID 502s immediately (P4). What you're
+looking at once you've already clicked can itself be wrong, not just the
+list you clicked from. Correct behavior when a host is a laptop that comes
+back; wrong when it is a container that never will.
 
-**Confirmed and sharpened by P4 (2026-09-02):** the staleness reaches
-further than "lists look fine until you click." A thread's own detail
-payload — the embedded `environment` object a status badge would render
-from — kept reporting a live status for over a minute after the host had
-gone `disconnected`, while the dedicated status endpoint for the identical
-ID 502'd immediately. What you're looking at once you've already clicked
-can itself be wrong, not just the list you clicked from.
-
-**What P6 changes about urgency:** state portability (C3) and identity
-persistence (C6) looked like separate problems on separate axes. P6 showed
-they're closer than that — a good chunk of what "the machine is gone"
-needs, reconnecting to the same logical entity, already works today with
-zero new server code, just unwired orchestration. That doesn't remove the
-C3 case (uncommitted workspace changes and harness session content still
-need their own answer), but the identity half of the staleness problem is
-now a wiring task (fix `install-machine.sh`, add a CLI/UI surface for
+**State portability (C3) and identity persistence (C6) are closer than
+they look.** They read like separate problems on separate axes, but a good
+chunk of what "the machine is gone" needs — reconnecting to the same
+logical entity — already works today with zero new server code, just
+unwired orchestration (P6). That doesn't remove the C3 case (uncommitted
+workspace changes and harness session content still need their own
+answer), but the identity half of the staleness problem above is now a
+wiring task (fix `install-machine.sh`, add a CLI/UI surface for
 `enroll-key`), not a design problem waiting on an architecture decision.
 
 **Daemon alongside vs across.** Alongside = daemon and agent share one
@@ -105,8 +105,8 @@ Six load-bearing claims. If any is false, the design changes shape.
 - **C3 — Without process-tier, path identity is most of the unlock, but not
   all of it.** Both harnesses pin sessions to an absolute `cwd`, so a
   canonical workspace path makes session state portable by file copy —
-  confirmed against a real session file by P3 (2026-09-02). But the same
-  transcript also carries account/machine-fingerprint data the harness
+  confirmed against a real session file by P3. But the same transcript
+  also carries account/machine-fingerprint data the harness
   stamps into context (sandbox policy paths, global config, MCP/skill
   listings) that would be *wrong*, not just irrelevant, on another machine.
   Full-fidelity resume needs path identity plus harness context regenerated
@@ -118,9 +118,9 @@ Six load-bearing claims. If any is false, the design changes shape.
   bb's subsystems can consume a declaration rather than branching on runtime
   identity.
 - **C6 — Host identity can survive compute recreation via a persisted
-  credential, with no new server protocol.** Confirmed 2026-09-02 by P6,
-  against two live containers: a persisted `auth.json` on a surviving data
-  dir reconnects automatically through the existing
+  credential, with no new server protocol.** P6 confirmed this against two
+  live containers: a persisted `auth.json` on a surviving data dir
+  reconnects automatically through the existing
   `upsertHost`-keyed-on-`hostId` path, and even a fully lost data dir can be
   reclaimed via the previously-unwired `POST /internal/hosts/enroll-key`
   route. Both gaps found are orchestration/UX (`install-machine.sh` not

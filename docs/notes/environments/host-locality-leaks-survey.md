@@ -6,7 +6,7 @@ server, the host daemon, the agent process, the workspace, and the human's
 browser all live on the same machine with the same filesystem.
 
 Companion to
-[environments-remote-execution-research.md](environments-remote-execution-research.md)
+[remote-execution-research.md](remote-execution-research.md)
 (what `Environment` is, host churn, thread durability) and
 [container-and-remote-environments.md](container-and-remote-environments.md)
 (whether plugins can wrap the agent spawn). Findings already established
@@ -55,13 +55,12 @@ Callers that silently mean "primary host" when no host is specified:
 - [`services/system/usage-limits.ts:21`](../../apps/server/src/services/system/usage-limits.ts)
 - [`services/ai/inference.ts:261`](../../apps/server/src/services/ai/inference.ts)
 
-**Update (2026-09-02):** C6/P6 in
-[design-position-and-probes.md](design-position-and-probes.md) found this is
-the same underlying gap as the host-identity-reclaim mechanism, wearing a
-different symptom — both are "nothing gives a host a first-class,
-reconcilable identity beyond an implicit single-host assumption."
-`project:bb` task 492 tracks designing a fix for both together rather than
-as two patches that each touch the `hosts` table.
+This is the same underlying gap as C6's host-identity-reclaim mechanism
+(see [design-position-and-probes.md](design-position-and-probes.md)),
+wearing a different symptom — both come from bb never giving a host a
+first-class, reconcilable identity beyond an implicit single-host
+assumption. `project:bb` task 492 tracks designing a fix for both together
+rather than as two patches that each touch the `hosts` table.
 
 ### 1b. Server-side inference runs on the primary host, not the thread's host
 
@@ -86,17 +85,14 @@ server. If the agent booted a dev server on a remote host, the rewritten
 link points at the wrong machine. On by default
 (`REWRITE_LOCALHOST_LINKS_DEFAULT = true`).
 
-**Correction (2026-08-30):** the first draft said "there is no concept of
-expose a port from the host running this thread." That is wrong.
+The leak is narrower than it looks: bb does have a port-exposure primitive.
 `bb.hosts.declareSharedPorts(hostId, ports)` and
 `bb.hosts.ensureSharedPortTunnel(hostId)`
 ([`packages/plugin-sdk/src/backend-contract.ts:1142-1171`](../../packages/plugin-sdk/src/backend-contract.ts))
 let a plugin declare loopback ports on a specific host; the server
 aggregates them, owns generations, retains the declaration while the host is
 offline, and delivers it on the next credentialed daemon session.
-
-The leak is narrower than stated: the primitive exists, and the link
-rewriter does not use it. `rewriteLocalhostLinkHref` swaps in the browser's
+`rewriteLocalhostLinkHref` just doesn't use it — it swaps in the browser's
 hostname rather than resolving the thread's host through the tunnel.
 
 ### 1d. Plugin backends run on the server, with server-local powers
@@ -230,26 +226,23 @@ Two observations:
   member, `findLocalPathProjectSourceForHost(sources, hostId)` exists, and
   `Project.gitRemoteUrl` is already a field. Multi-host projects are
   modeled; the missing piece is a source type that can *materialize*.
-- **Correction (2026-08-30): a project CAN be brought to a new host.** The
-  first draft said "nothing clones one." Wrong. `POST /projects/:id/sources`
+- **A project can be brought to a new host.** `POST /projects/:id/sources`
   with `type: "clone"`
   ([`apps/server/src/routes/projects.ts:472-530`](../../apps/server/src/routes/projects.ts))
   sends a `project.clone` daemon command using `Project.gitRemoteUrl` as the
   anchor, then creates the `local_path` source at the resolved path. Clone
   is an *action that produces* a `local_path`, not a source type — which is
-  why the union stayed at one member and the first pass missed it.
-
-  Root cause of the miss: the survey enumerated daemon commands by grepping
-  `z.literal("host.*")`. There are seven other namespaces —
-  `project.*`, `environment.*`, `workspace.*`, `thread.*`, `provider.*`,
-  `turn.*`, `interactive.*`. Anything claiming "bb cannot do X on a host"
-  must check all of them.
+  why the union stayed at one member. (The methodology gap that first missed
+  this — grepping only the `host.*` daemon-command namespace — is called out
+  as a standing lesson in
+  [design-position-and-probes.md](design-position-and-probes.md) Part 5.)
 
 The real gap is narrower than "can't materialize": cloning is an explicit,
 manual API call with a `(project_id, host_id)` unique constraint. Nothing
 does it as part of provisioning, and `Environment.hostId` is still immutable
-(research notes §5, finding 3), so a new host is inert until someone
-deliberately adds a source to it.
+(see [remote-execution-research.md](remote-execution-research.md) §5,
+finding 3), so a new host is inert until someone deliberately adds a source
+to it.
 
 ---
 
@@ -302,29 +295,16 @@ anything new:
 
 ---
 
-## Ranked read on what's actually blocking
+## What's actually blocking
 
-**Superseded 2026-08-30.** This ranking was written before the container
-spike (research notes §8) and before the two corrections above. It ranked
-project materialization first on a claim that turned out false. The current
-read lives in
-[environment-capability-model.md](environment-capability-model.md): the two
-axes with no machinery at all are **state durability** and **credential
-acquisition**, and the rest have partial primitives already. Kept below as
-written, for the record.
-
-1. ~~**Project can't exist on a new host** (§5). Everything else is
-   downstream.~~ Wrong — see the correction in §5.
-2. **The spawn's ambient contract** (§3) — the real shape of the
-   "pluggable execution" problem, bigger than `command`/`args`. Note the
-   spike made this less urgent: under daemon-alongside it does not arise.
-3. **`requirePrimaryHostId` as an implicit default** (§1a/1b) — cheap to
-   fix, and every one of those call sites is a wrong answer the moment a
-   second host exists.
-4. **No port/URL story for a remote host** (§1c) and no reachability model
-   beyond the manual ssh-target mapping (§4b).
-5. **Per-host bootstrap** (§6) — credentials, skills, MCP. A new host is
-   born empty and nothing notices.
+Superseded by the axes-based model in
+[environment-capability-model.md](environment-capability-model.md): the
+axes with no machinery at all — state durability, durable artifacts,
+persistence provider, lifecycle autonomy, plus the credential half of
+credential acquisition — are the current read on what's missing. This
+section originally carried a claim-by-claim ranking that put project
+materialization first; see [CHANGELOG.md](CHANGELOG.md) (2026-08-30) for
+that original ranking and why it was superseded.
 
 ---
 

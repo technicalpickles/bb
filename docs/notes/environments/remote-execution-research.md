@@ -208,17 +208,12 @@ desktop" scenario the docs assume.
 3. **`Environment.hostId` is immutable** — set at creation, never updated
    anywhere in
    [`packages/db/src/data/environments.ts`](https://github.com/technicalpickles/bb/blob/389329a2cf938d4463be3e2f84af3c344e5f5bca/packages/db/src/data/environments.ts).
-   No re-provision/migration path if a host disappears.
-
-   **Update (2026-09-02):** this reads narrower after C6/P6 in
-   [design-position-and-probes.md](design-position-and-probes.md). A host
-   whose *compute* disappears (container killed, volume intact) can reclaim
-   its **same** `hostId` on fresh compute via the persisted `auth.json` and
-   `upsertHost`, confirmed live against a real daemon/server pair — no
-   `Environment.hostId` mutation needed, because the host row itself never
-   actually changed identity. What's still missing is exactly what this
-   point originally meant: reassigning an environment to a genuinely
-   *different* logical host. That gap is real and unaddressed by C6.
+   This only blocks reassigning an environment to a genuinely *different*
+   logical host — a vanished host reclaiming its **own** identity on fresh
+   compute doesn't need it: a persisted `auth.json` reconnects through the
+   existing `upsertHost` path with no `Environment.hostId` mutation,
+   because the host row's identity never actually changed (confirmed live,
+   C6/P6 in [design-position-and-probes.md](design-position-and-probes.md)).
 4. **The auto-update path can permanently strand a bare sandbox process.**
    On protocol-version mismatch, the daemon downloads the update then calls
    `shutdown("self-update")`, which **fully exits the process**
@@ -425,21 +420,16 @@ host" as a first-class operation at all** — resume is implicitly
 same-host-reconnects, full stop. This is a separate problem from
 provisioning (§3, §6) and host churn (§5): even with a working
 `HostProvisioner` and a real ephemeral `hostType`, a thread whose host died
-mid-turn still has nowhere to resume *to* without new plumbing here.
-
-**Update (2026-09-02):** C6/P6 in
-[design-position-and-probes.md](design-position-and-probes.md) narrows one
-slice of this. If recreated compute carries forward the same daemon
-identity (persisted `auth.json` on a surviving volume, or a reissued
-credential via `POST /internal/hosts/enroll-key` when even that's lost),
-then "resume on a different host" often doesn't need to happen at all —
-it's still the *same* host reconnecting, so `AgentRuntime.resumeThread`'s
-same-host assumption keeps holding and the workspace/harness-session files
-are wherever they were. This only helps when compute recreation intends to
-be a continuation of the same logical host (the disposable-container case
-this section worries about); it does nothing for the genuinely different
-case of moving a thread to a *different* host, which still has no
-mechanism.
+mid-turn still has nowhere to resume *to* without new plumbing here —
+unless compute recreation is intended as a continuation of the *same*
+logical host, in which case C6/P6 in
+[design-position-and-probes.md](design-position-and-probes.md) already
+covers it: a persisted daemon identity reconnecting on fresh compute (via a
+surviving `auth.json`, or a reissued credential when even that's lost)
+means `AgentRuntime.resumeThread`'s same-host assumption keeps holding, so
+nothing new is needed for the disposable-container case this section
+worries about most. This doesn't help the genuinely different case — moving
+a thread to a *different* host — which still has no mechanism.
 
 ## Open threads / not yet investigated
 
