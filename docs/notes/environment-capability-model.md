@@ -156,16 +156,33 @@ forces the entity layer to grow what the request layer already has.
   clock skew break the daemon's session assumptions. Credits are available.
   This is the highest-value next probe.
 - Validate against a `state-durability: process`-less runtime that is also
-  service-managed, to check the axis separates cleanly. incus/LXD is the
-  natural second, and is runnable locally rather than only readable.
+  **service-managed** (Coder's Docker template, validated below, is
+  process-less but *self-managed* — the volume is yours to lose). incus/LXD
+  or a managed disk provider remain the natural next check, and are runnable
+  locally rather than only readable.
 - Credential acquisition for runtimes that cannot inherit from a host. Still
-  the axis with no answer anywhere.
+  the axis with no answer anywhere for bb's own daemon, though Coder's
+  generic-secret pattern (below) is a viable template to copy.
 - How bb should reconcile a runtime's own port exposure with
   `declareSharedPorts` when both exist.
 - Whether terminals become an opt-in capability, and what the UI does on a
   host that declares no terminal.
 - What `lifecycle-autonomy: idle-stop` requires of the grace windows and of
   `ThreadStatus`, given a 15-minute idle stop against a 30-second window.
+- **New candidate property, not yet an axis: daemon identity persistence
+  across compute recreation.** Surfaced by Coder (below) decoupling agent
+  identity from the container's lifecycle. Orthogonal to state durability —
+  it's not about what data survives, it's about whether a *freshly started
+  process* on recreated compute can prove it's a continuation of a
+  previously-enrolled host rather than a brand-new one. bb has no mechanism
+  for this today; `Environment.hostId` is immutable and a vanished host has
+  nowhere to move to. Needs its own design pass before it becomes a tenth
+  axis rather than a one-off note.
+- Whether a capability is gated by the runtime's engineering versus a given
+  deployment's license tier (Coder's dormancy/auto-deletion are
+  enterprise-only; self-hosted OSS gets `idle-stop` but not `idle-destroy`).
+  The model currently assumes capability is a property of the runtime; this
+  is a case where it's runtime *and* license, which nothing declares today.
 
 ---
 
@@ -269,3 +286,128 @@ Sources: [Persistence](https://www.daytona.io/docs/en/persistence/),
 [Sandboxes](https://www.daytona.io/docs/en/sandboxes/),
 [TypeScript SDK](https://www.daytona.io/docs/en/typescript-sdk/sandbox/),
 [Daytona docs root](https://www.daytona.io/docs/).
+
+---
+
+## Runtime validation 2: Coder (2026-09-02)
+
+Chosen for two reasons: it's self-hostable, so it could be tested for real
+with no cloud account and no credits, on a laptop; and it's a plausible
+opposite pole from Daytona on the durability axis, worth checking before
+assuming "VM sandbox platforms" is a coherent category rather than
+per-runtime variation.
+
+**Method:** installed `coder` v2.35.3 locally via Homebrew, ran `coder
+server` fully self-hosted against `127.0.0.1:3000` (its embedded Postgres,
+no external dependency), pushed the stock `docker` starter template
+unmodified, created a workspace. Before stopping it: wrote a marker file to
+`/home/coder` (the template's named Docker volume), a second marker to
+`/tmp` (container root, not volume-backed), and started a background `while
+true` loop appending a timestamped heartbeat line to a log every 2s. Then
+`coder stop` (the real control-plane path, not `docker stop`), waited 45s —
+past bb's 30s `DAEMON_ACTIVE_WORK_DISCONNECT_GRACE_MS` — then `coder start`,
+then diffed what survived. Cleaned up afterward: workspace deleted, template
+removed, Docker container/volume/image removed, local server killed, scratch
+config directory deleted. No bb code or docs were touched by the test itself
+(this section is the only artifact).
+
+### No pause tier — `state-durability: filesystem`, confirmed empirically
+
+`coder stop` destroyed the container outright in about a second — gone
+entirely from `docker ps -a`, not paused, not archived. The heartbeat log
+stopped dead at the exact destruction timestamp and the process was not
+running post-restart; nothing about it survived. `coder start` created a
+**brand-new container** (a different Docker container ID) in ~1.6s, agent
+healthy again in ~14s. `/home/coder/marker.txt` survived (the named volume);
+`/tmp/root-marker.txt` did not (fresh container root). This is exactly
+`state-durability: filesystem`, `persistence-provider: self-managed` — the
+volume is a Docker construct you own, not a platform-managed guarantee — and
+it is the clean opposite of Daytona's `pause`. Confirms the axis separates
+runtimes as sharply as the model claims: two "container/VM sandbox
+platforms," nearly disjoint capability profiles.
+
+### A property the nine axes don't name: daemon identity survives compute recreation
+
+The template's `coder_agent` Terraform resource is **not** gated by `count =
+data.coder_workspace.me.start_count` the way `docker_container` is. Stopping
+only destroys the container; the agent resource — and its auth token — is
+untouched ("Drift detected (update)" in the Terraform plan, not destroy/
+recreate). So when a fresh container starts and runs the agent's init
+script, it reconnects **as the same logical workspace**, automatically, with
+no re-auth step, even though the compute underneath it is 100% new.
+
+This is architecturally the missing piece the design doc's staleness section
+already flagged: bb's own `Environment.hostId` is immutable and a vanished
+host has "nowhere to move to" (P4 found the same shape — a host flips to
+`disconnected` in ~1s with no path back). Coder doesn't solve this *for* a
+bb daemon running inside one of its workspaces — a fresh bb daemon process
+in the fresh container still has to prove it's a continuation of the
+previous host, same problem as plain Docker. But Coder is a working
+reference architecture for the fix: decouple logical identity from physical
+compute, mint a durable token at logical-creation time, treat a
+control-plane-initiated stop as known-good rather than indistinguishable
+from a crash. Since bb's own daemon data dir could live on the same
+persistent volume the workspace files do, the same trick is available to bb
+directly — if the daemon's startup path checks for existing enrollment
+credentials on disk before enrolling fresh. Not evaluated further this
+session; see the **Open** section above.
+
+### Credential acquisition: a cleaner non-interactive pattern than bb has today
+
+Two distinct mechanisms, easy to conflate: git-specific `coder_external_auth`
+is OAuth, interactive once per user, then auto-injected via `GIT_ASKPASS`.
+Separately, and more relevantly, **arbitrary secrets are just Terraform
+variables piped into `coder_agent`'s `env` block** — template-admin-set,
+non-interactive, no OAuth, applies to every workspace built from that
+template. That's the same shape P2 already found bb's daemon plumbing
+supports mechanically (env passthrough to the provider subprocess works
+generically) — Coder is independent evidence that "declare a secret at
+provisioning time, inject into the agent's environment" is normal, working
+practice elsewhere, not a hopeful assumption. Strengthens the case for
+finishing `injected` as a real value once bb's own provider health checks
+stop being blind to env vars (P2's still-open half).
+
+### Port exposure: opt-in per template, same shape as bb's own gap
+
+`coder_app` gives subdomain-based port exposure, but the template author has
+to wire up each port explicitly — it is not automatic the way Daytona's "any
+listening port gets a preview URL" is. Structurally the same shape as bb's
+`declareSharedPorts`: a mechanism that exists but has to be hand-declared,
+not a platform guarantee. Doesn't resolve the "how does bb reconcile a
+runtime's own port exposure with `declareSharedPorts`" open question, but
+confirms it's a real recurring shape, not a Daytona-specific wrinkle.
+
+### Lifecycle autonomy: native and well-specified, but license-gated
+
+Autostop-on-inactivity and autostart-on-schedule are free, self-hosted, OSS
+features — admin sets defaults, users can adjust if allowed. Dormancy
+(mark inactive after N days) and auto-deletion (destroy after N days
+dormant) exist too, but are **enterprise/premium-only** per the docs — not
+available in the free self-hosted tier this session actually ran. Worth
+naming precisely because the model's axes currently treat capability as a
+property of the *runtime*; this is a case where it's runtime *and*
+deployment license, which nothing in the model declares today. See Open.
+
+### Not verified
+
+- Whether a non-Docker Coder template (a real VM provider, e.g. AWS/GCP)
+  would land differently on the durability or persistence-provider axes —
+  this session only tested the Docker provisioner, which is inherently
+  self-managed. Coder itself is provisioner-agnostic; "Coder" is no more a
+  fixed capability set than "Daytona" was.
+- Full-fidelity harness session resume (C3) — this session tested file/
+  process survival, not an actual `claude`/`codex` session resuming inside
+  a rebuilt container. The path-stability precondition looks satisfiable
+  (fixed `/home/coder` mount) but wasn't exercised end-to-end.
+- Outbound network behavior from inside a workspace, and whether a
+  Coder-hosted bb daemon enrolling against a real (non-tunnel) bb server
+  has any surprises beyond what plain Docker already showed in P1/P4.
+
+Sources: [Workspace Lifecycle](https://coder.com/docs/user-guides/workspace-lifecycle),
+[Workspace Scheduling](https://coder.com/docs/admin/templates/managing-templates/schedule),
+[External Auth](https://coder.com/docs/admin/external-auth),
+[Port Forwarding](https://coder.com/docs/admin/networking/port-forwarding),
+[Coder Agents](https://coder.com/docs/ai-coder/agents),
+[Install](https://coder.com/docs/install),
+and the `docker` starter template (`coder templates init --id docker`),
+read directly and run locally this session.
