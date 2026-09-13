@@ -5,6 +5,103 @@ this directory. Each entry names what changed, why, and which doc/section
 it affected. The docs themselves state current understanding, not the
 history of how they got there — use this file for that.
 
+## 2026-09-13
+
+Upstream `main` synced after lagging this branch by ~450 commits (releases
+0.41.0–0.43.0). Checked every claim in this directory against what actually
+shipped in that window — two PRs land squarely in this space: **#3227
+"Environment providers: plugins own where threads run"** +
+**#3443 "Consolidate environment provisioning into one durable lifecycle"**
+(environment/workspace side), and **#3274 "Machine providers: durable
+lifecycle and shared plugin APIs"** (host/machine side, includes the
+experimental Modal sandbox provider). Full comparison below; nothing here
+was falsified, several open items closed, two claims need a wording
+correction (not a reversal), and P5 is untouched.
+
+- **design-position-and-probes.md, Part 1 ("The position").** Position
+  holds: #3227/#3443 did not add a new pluggable `Environment` entity. The
+  `environments` row is still one generic shape (workspace path + host + an
+  opaque per-provider `resource` JSON blob); the one transitional table
+  that briefly existed (`environment_launches`) was deleted back into that
+  single row by #3443. What shipped is narrower and real: plugins now
+  supply *who materializes the resource* behind that one row, via a
+  `create`/`remove`/`validate`/`availability` contract
+  (`@get-bb/plugin-sdk/environment-provider`) selected by
+  `environmentProviderId` — not a new entity kind. Added one clarifying
+  sentence to the position statement so "no per-provider integration in
+  the core" isn't misread as "no provider plugins at all."
+- **design-position-and-probes.md, Part 1 ("Liveness is a property of
+  requests, not entities").** `Environment.hostId` immutability bullet
+  softened, not reversed. `reserveEnvironment()` can now rewrite `hostId`
+  on the same row when a fully-torn-down provisioning attempt is retried
+  on a different host — but only after full teardown (no path, no
+  resource), never for a live/`ready` environment. The disconnect case P4
+  exercised is untouched: nothing reassigns `hostId` on a bare
+  disconnect, and the staleness P4 found is confirmed still live on
+  current `main` — `listEnvironments` remains an unjoined flat select,
+  and the new provisioning state machine's `ready` branch never checks
+  host connectivity. The only staleness fix that shipped
+  (`markHostEnvironmentsDestroyed`) fires solely when bb itself tears
+  down an ephemeral machine it provisioned, not on an arbitrary
+  disconnect — P4's finding stands exactly as written.
+- **design-position-and-probes.md, C6.** Confirmed as the *shipped*
+  mechanism, not superseded. `apps/host-daemon/src/identity.ts` has a
+  zero-line diff since this branch's base commit; `upsertHost` is still
+  the same `hostId`-keyed insert-or-update. #3274 adds `launchKey` /
+  `phase` / `resource` columns on top of the existing `hosts` row for
+  machine-provider orchestration — not a new identity table; the
+  migration's backfill literally copies the existing `hostId` into the
+  new `resource.hostId` field. Both orchestration gaps P6 flagged are now
+  closed: `install-machine.sh`'s already-joined fast path starts a
+  daemon, and #3274 adds a first-class `--start`/`--stop`/`--uninstall
+  --host-id` lifecycle action. Not confirmed either way in this pass:
+  whether the loopback-only `/internal/hosts/enroll-key` "data dir fully
+  lost" reclaim path got a real authenticated surface — worth a
+  follow-up check before calling that gap closed.
+- **design-position-and-probes.md, P5.** Unaffected, still the highest-value
+  open probe. The new Modal sandbox provider's "same-host resume" is a
+  `snapshotFilesystem()` + `terminate()` + reboot-from-image cycle —
+  process death, filesystem-only survival, daemon reconnection explicitly
+  re-driven through the same persisted-`auth.json` path P6 validated. That
+  is evidence for C6, not a test of C2 or of a real process-tier
+  freeze/thaw (dropped WebSocket, clock skew, expired token). Nothing that
+  shipped exercises what P5 asks.
+- **environment-capability-model.md, axes table — workspace
+  materialization.** Marked resolved. All three bundled provider plugins
+  (git-worktree, personal-workspace, project-checkout) now compute paths
+  from a fixed, validated formula rooted at the daemon's `dataDir` (e.g.
+  `<dataDir>/worktrees/<pathKey>/<repoDirName>`), landed by #3227. The
+  "no canonical-path convention" gap this doc flagged is closed, per
+  provider plugin rather than one host-wide scheme.
+- **environment-capability-model.md, axes table — credential acquisition.**
+  `injected` moved from "nothing" to a real, shipped mechanism: an
+  AES-256-GCM encrypted machine-environment store (#3274), admin-settable
+  via CLI/UI, delivered to agent turns and, as of the same window's
+  `3f7729443`, synced into the daemon's own process env on
+  connect/reconnect. Structurally the same shape the Coder validation
+  proposed as a template to copy. Still open, untouched by any of this:
+  whether a provider's own auth/health check (Keychain-only for Claude
+  Code, file-only for Codex, per P2) actually honors an injected
+  credential for a live turn.
+- **environment-capability-model.md, axes table — lifecycle autonomy.**
+  Partially resolved, with the boundary now precise. #3274 adds a real
+  `hosts.phase` state machine
+  (`creating/active/suspending/suspended/resuming/removing/destroyed`)
+  with a distinct "known-good maintenance" signal, separate from the
+  crash/disconnect path — but only for idle-stop *bb itself* initiates
+  (the Modal provider's own idle timer calls `experimental_suspend`
+  through bb's scheduler). A runtime's own autonomous stop, invisible to
+  bb and colliding with the 5s/30s disconnect grace windows — the
+  original Daytona/Coder framing — is still unaddressed by anything in
+  this window.
+- **environment-capability-model.md, "Open" section.** Two items closed
+  (canonical-path convention, credential-injection delivery, both above).
+  "Daemon identity persistence across compute recreation" reclassified
+  from candidate property to shipped feature — see C6 above. Everything
+  else in Open (P5, external lifecycle-autonomy, `requirePrimaryHostId`
+  unification, provider health checks ignoring env vars, license-gated
+  capability) stands unchanged.
+
 ## 2026-09-02
 
 - **design-position-and-probes.md — C6 added, confirmed same day.** New

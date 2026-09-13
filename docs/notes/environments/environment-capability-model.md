@@ -19,10 +19,18 @@ The Discord framing was "environments should be pluggable," and the research
 showed `Environment` is not that thing — it binds a workspace directory to a
 host and nothing more.
 
-The design does not add a new pluggable `Environment`. **A runtime declares
-what it can do, and bb adapts.** Every question we tried to answer globally
-("do we mount volumes or snapshot state?", "daemon inside or outside?")
-turned out to be a per-runtime answer wearing a global disguise.
+The design does not add a new pluggable `Environment` **entity**. **A
+runtime declares what it can do, and bb adapts.** Every question we tried
+to answer globally ("do we mount volumes or snapshot state?", "daemon
+inside or outside?") turned out to be a per-runtime answer wearing a
+global disguise.
+
+**Update (2026-09-13):** upstream's own environment/machine-provider work
+(`#3227`, `#3274` — see [CHANGELOG.md](CHANGELOG.md)) confirms this rather
+than contradicting it. The `environments` row stays one generic shape
+(workspace path + host + an opaque per-provider `resource` blob); what
+shipped is a plugin contract for *who materializes that resource*, not a
+new polymorphic entity.
 
 Two topologies, named for what actually distinguishes them:
 
@@ -50,11 +58,11 @@ for what's been confirmed against a live runtime versus read from source.
 | **State durability** | `none` · `filesystem` · `filesystem-offloaded` · `process` | **Nothing.** `hostTypeValues = ["persistent"] as const` — one value, and it is *named* persistent. Both non-`process` tiers now have a live example: Daytona `stop` and Coder's Docker template land on `filesystem`, empirically confirmed for Coder by a real `coder stop`/`start` cycle. |
 | **Durable artifacts** | `snapshots` · `volumes` · none | **Nothing.** Things that outlive the machine itself and can seed a new one. |
 | **Persistence provider** | `self-managed` · `service-managed` | **Nothing.** Qualifies state durability: same capability, very different burden. Docker gives nothing unless you build it; a service may hand you the whole thing behind an API call. Coder's stock Docker template landed squarely on `self-managed` — confirmed by killing the container and watching only the named-volume marker file survive — making it the clean opposite pole from Daytona's `service-managed` `pause`. |
-| **Workspace materialization** | `inherited` · `cloned` · `preexisting` | `project.clone` exists (`POST /projects/:id/sources`, `type: "clone"`) but is a manual call, never part of provisioning. No canonical-path convention. |
-| **Credential acquisition** | `inherited` · `injected` · `interactive` | **Nothing.** Binaries: `bb machine provider-cli install` works remotely, 11s. Credentials: `~/.codex/auth.json` never appears; the provider hint is literally "Run `codex` on the machine to sign in." |
+| **Workspace materialization** | `inherited` · `cloned` · `preexisting` | **Resolved 2026-09-13.** `project.clone` still exists as a manual call, but the environment-provider plugin API (upstream `#3227`) now gives all three bundled providers a canonical, validated path formula rooted at the daemon's `dataDir` (e.g. `<dataDir>/worktrees/<pathKey>/<repoDirName>`). Per-provider, not one host-wide scheme, but fixed and predictable. |
+| **Credential acquisition** | `inherited` · `injected` · `interactive` | **`injected` shipped 2026-09-13.** Binaries: `bb machine provider-cli install` works remotely, 11s (unchanged). Credentials: an AES-256-GCM encrypted machine-environment store (upstream `#3274`), admin-settable via CLI/UI, delivered to agent turns and synced into the daemon's own process env on connect/reconnect. Still open: whether a provider's own auth/health check (Keychain-only for Claude Code, file-only for Codex) actually honors it for a live turn — untouched by this work; see P2. |
 | **Interactive surfaces** | `terminal` · `port-exposure` · `editor-reach` | Terminal: works, costs +357MB for `node-pty` (§8a), so opt-in. Port exposure: `bb.hosts.declareSharedPorts` exists — but a runtime may bring its own, and then they compete. Editor: `remote-ssh` context exists, mapping hand-declared. |
 | **Lifecycle ownership** | `bb` · `external` · `human` | Human only. Decides whether bb needs to hold cloud credentials. |
-| **Lifecycle autonomy** | `none` · `idle-stop` · `idle-destroy` | **Nothing, and bb actively assumes `none`.** A runtime that stops the machine on its own timer is indistinguishable from a crash today. |
+| **Lifecycle autonomy** | `none` · `idle-stop` · `idle-destroy` | **Partially resolved 2026-09-13, for the `bb`-owned case only.** A real `hosts.phase` state machine now exists (`creating/active/suspending/suspended/resuming/removing/destroyed`, upstream `#3274`) with a distinct "known-good maintenance" signal — but only when *bb itself* initiates the idle-stop (the Modal provider's own idle timer calls `experimental_suspend` through bb's scheduler). A runtime's own autonomous stop, invisible to bb and colliding with the 5s/30s disconnect grace windows, is still indistinguishable from a crash. |
 
 ### The durability scale, concretely
 
@@ -80,13 +88,20 @@ once for everybody.
 
 ### The empty axes
 
-Five of nine have some machinery. The four that are genuinely empty:
-**state durability**, **durable artifacts**, **persistence provider**, and
-**lifecycle autonomy** — plus **credential acquisition**, which has the
-binary half solved and the credential half untouched.
+As of 2026-09-13, the count has shifted: **state durability**, **durable
+artifacts**, and **persistence provider** are still genuinely empty in
+bb's own core (nothing changed these — they remain properties bb reads
+off a runtime, not machinery bb built). **Lifecycle autonomy** now has
+real, shipped machinery for the case bb itself owns (see axes table
+above), but is still empty for a runtime's own autonomous stop.
+**Credential acquisition** now has both halves addressed in different
+ways: binaries were already solved, and the credential half now has a
+shipped `injected` mechanism — what's still open is whether providers'
+own health checks consume it.
 
-Note what that list has in common: they are all about *the machine's
-lifetime*, which is exactly the thing `hostType` was built to not have.
+Note what the still-empty axes have in common: they are all about *the
+machine's lifetime*, which is exactly the thing `hostType` was built to
+not have.
 
 ## Full-fidelity resume: reachable, and the unlock is path identity
 
@@ -155,37 +170,48 @@ forces the entity layer to grow what the request layer already has.
 - **Test Daytona `pause`/resume for real.** The free-lunch claim rests on it,
   and a docs read cannot tell us whether a resumed VM's dropped WebSocket and
   clock skew break the daemon's session assumptions. Credits are available.
-  This is the highest-value next probe.
+  This is the highest-value next probe, still untouched as of 2026-09-13 —
+  see [design-position-and-probes.md](design-position-and-probes.md) P5.
+  Upstream's own Modal sandbox provider does not substitute for this: it's a
+  filesystem-snapshot restore into a brand-new sandbox, not a process-tier
+  freeze/thaw.
 - Validate against a `state-durability: process`-less runtime that is also
   **service-managed** (Coder's Docker template, validated below, is
   process-less but *self-managed* — the volume is yours to lose). incus/LXD
   or a managed disk provider remain the natural next check, and are runnable
   locally rather than only readable.
-- Credential acquisition for runtimes that cannot inherit from a host. Still
-  the axis with no answer anywhere for bb's own daemon, though Coder's
-  generic-secret pattern (below) is a viable template to copy.
+- ~~Credential acquisition for runtimes that cannot inherit from a host.~~
+  **Resolved 2026-09-13** for the injection half: upstream shipped an
+  encrypted machine-environment store (`#3274`), the same shape as Coder's
+  generic-secret pattern below. Still open: whether a provider's own health
+  check consults it for a live turn (see axes table, credential
+  acquisition, and P2).
 - How bb should reconcile a runtime's own port exposure with
   `declareSharedPorts` when both exist.
 - Whether terminals become an opt-in capability, and what the UI does on a
   host that declares no terminal.
-- What `lifecycle-autonomy: idle-stop` requires of the grace windows and of
-  `ThreadStatus`, given a 15-minute idle stop against a 30-second window.
-- **New candidate property, not yet an axis: daemon identity persistence
-  across compute recreation.** Surfaced by Coder (below) decoupling agent
-  identity from the container's lifecycle. Orthogonal to state durability —
-  it's not about what data survives, it's about whether a *freshly started
-  process* on recreated compute can prove it's a continuation of a
-  previously-enrolled host rather than a brand-new one. P6/C6 in
+- **Narrowed 2026-09-13:** what `lifecycle-autonomy: idle-stop` requires of
+  the grace windows and of `ThreadStatus` is now answered for the case bb
+  itself owns (a real `hosts.phase` state machine distinguishes
+  known-good-maintenance from crash — see axes table). Still open: the
+  original framing, a runtime's *own* autonomous stop happening without
+  bb's initiation, invisible to bb, colliding with the 5s/30s grace
+  windows. Nothing shipped addresses that case.
+- **Daemon identity persistence across compute recreation — shipped, no
+  longer a candidate property.** Surfaced by Coder (below) decoupling agent
+  identity from the container's lifecycle. P6/C6 in
   [design-position-and-probes.md](design-position-and-probes.md) confirmed
-  this against two live containers: the mechanism already exists end-to-end
-  (`upsertHost` keyed on `hostId`, plus a previously-unwired
-  `POST /internal/hosts/enroll-key` reclaim path) and needs no new server
-  protocol. The mechanism itself doesn't need a design pass — what remains
-  is orchestration (`install-machine.sh` doesn't start a daemon on the
-  already-joined path) and exposing reclaim as a real, authenticated
-  CLI/UI action. `project:bb` task 492 tracks designing this together with
-  `requirePrimaryHostId`, since both are the same underlying "no first-class
-  reconcilable host identity" gap.
+  the mechanism already existed end-to-end (`upsertHost` keyed on
+  `hostId`, plus a previously-unwired `POST /internal/hosts/enroll-key`
+  reclaim path) and needed no new server protocol. As of 2026-09-13,
+  upstream's machine-provider work (`#3274`) productizes exactly this:
+  same `hostId`/`upsertHost` primitive, plus a first-class
+  `--start`/`--stop`/`--uninstall --host-id` lifecycle action and a fixed
+  `install-machine.sh` already-joined path — the orchestration gaps this
+  doc flagged. Not independently re-confirmed: whether the fully-lost-data-
+  dir reclaim route got a real authenticated surface. `project:bb` task 492
+  (unifying this with `requirePrimaryHostId`) should be checked against
+  what actually shipped before assuming it's still needed as scoped.
 - Whether a capability is gated by the runtime's engineering versus a given
   deployment's license tier (Coder's dormancy/auto-deletion are
   enterprise-only; self-hosted OSS gets `idle-stop` but not `idle-destroy`).

@@ -49,6 +49,16 @@ answered against real execution. Only **P5** (Daytona pause/resume with a
 live enrolled daemon) remains open — it needs cloud credits and tests C2,
 the strongest and least-verified claim in the design.
 
+**2026-09-13:** cross-checked every claim in this directory against
+upstream `main`, which had shipped ~450 commits (releases 0.41.0–0.43.0)
+including its own environment-provider and machine-provider plugin work
+squarely in this space. Nothing here was falsified; several open items
+closed (canonical-path convention, credential injection, daemon-identity
+persistence); two claims got a wording correction, not a reversal
+(`Environment.hostId` immutability, the "no pluggable `Environment`"
+position); P5 is untouched and still the highest-value open probe. Full
+comparison in [CHANGELOG.md](CHANGELOG.md).
+
 Open follow-up work is tracked in taskwarrior (`task project:bb list`):
 two bugs found along the way (`install-machine.sh`'s already-joined branch
 never starts a daemon; a `pnpm bb:dev` CLI arg-parsing bug), one design

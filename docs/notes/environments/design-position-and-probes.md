@@ -22,7 +22,13 @@ in:
 ### The position
 
 **A runtime declares what it can do; bb adapts.** There is no new pluggable
-`Environment` type, and no per-provider integration in the core.
+`Environment` **entity**, and no per-provider branching in the core. (What
+*is* now pluggable, as of upstream's own environment/machine-provider work —
+see [CHANGELOG.md](CHANGELOG.md), 2026-09-13 — is who materializes the
+resource behind that one entity: a `create`/`remove`/`validate`/
+`availability` contract selected by `environmentProviderId`. The
+`environments` row itself stays one generic shape; that confirms this
+position rather than contradicting it.)
 
 This is not a preference. Every question we tried to settle globally turned
 out to be a per-runtime answer in disguise:
@@ -67,7 +73,10 @@ upstream knows:
 
 - `listEnvironments` has no join to hosts
 - `ThreadStatus` has no "host gone" value
-- `Environment.hostId` is immutable
+- `Environment.hostId` is immutable for any live/`ready` environment (as of
+  2026-09-13, one narrow exception exists: a fully-torn-down provisioning
+  attempt can be retried on a different host on the same row — never a
+  live environment, and it doesn't touch the disconnect case below)
 
 The staleness reaches further than a list that looks fine until you click, too — a
 thread's own detail payload (the embedded `environment` object a status
@@ -130,6 +139,15 @@ Six load-bearing claims. If any is false, the design changes shape.
   route. Both gaps found are orchestration/UX (`install-machine.sh` not
   starting a daemon on the already-joined path; no CLI/UI surface for
   reissuing a credential), not protocol.
+
+  **Update (2026-09-13):** both gaps are now closed upstream. Machine
+  providers (`#3274`) reuse this exact mechanism unchanged — same
+  `hostId`, same `upsertHost` keying — and add a first-class
+  `--start`/`--stop`/`--uninstall --host-id` lifecycle action plus a
+  fixed `install-machine.sh` already-joined path. Not independently
+  re-confirmed in this pass: whether `/internal/hosts/enroll-key`'s
+  "data dir fully lost" branch got a real authenticated surface, or is
+  still loopback-only. See [CHANGELOG.md](CHANGELOG.md).
 
   Not yet probed at all: **C1**. Every probe in this document ran
   daemon-alongside because that's the only topology bb has, so C1 has never
@@ -346,6 +364,15 @@ What idle *did* show, `docker kill`, then polled every 1–2s:
   at when you've already clicked — carrying a snapshot that direct query
   on the identical ID contradicts.
 
+  **Update (2026-09-13):** re-checked against upstream's new durable
+  provisioning lifecycle (`#3443`). Still fully reproducible — the
+  `ready` branch of the new state machine never checks host connectivity,
+  and `listEnvironments` is still an unjoined flat select. The only
+  staleness fix that shipped fires solely when bb itself tears down an
+  ephemeral machine it provisioned, not on an arbitrary disconnect. This
+  finding stands exactly as written above. See
+  [CHANGELOG.md](CHANGELOG.md).
+
 ### P5 — Daytona pause/resume with a live enrolled daemon (C2, needs credits)
 
 **Why:** the single highest-value probe, and the only one that cannot be done
@@ -367,6 +394,17 @@ Then `process`-tier durability does not deliver the free lunch — you get the
 filesystem for free but still need reconnection logic, and possibly all of
 C3's path-identity machinery anyway. This is the result that would most
 change the design, which is why it is worth spending credits on.
+
+**Status (2026-09-13):** still open, unaffected by upstream's new
+machine-provider work. The Modal sandbox provider that shipped alongside
+C6's productization does `snapshotFilesystem()` + `terminate()` on
+suspend and boots a **brand-new** sandbox from that image on resume —
+process death, filesystem-only survival (`filesystem-offloaded`, not
+`process`), with daemon reconnection explicitly re-driven through the
+same persisted-credential path C6 already validated. That's further
+evidence for C6, not a test of C2. Nothing that has shipped anywhere
+exercises a true process-tier freeze/thaw. See
+[CHANGELOG.md](CHANGELOG.md).
 
 ### P6 — Does a persisted credential alone let recreated compute reclaim its host identity? (C6, cheap, local)
 
