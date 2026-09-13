@@ -101,6 +101,20 @@ correction (not a reversal), and P5 is untouched.
   else in Open (P5, external lifecycle-autonomy, `requirePrimaryHostId`
   unification, provider health checks ignoring env vars, license-gated
   capability) stands unchanged.
+- **host-locality-leaks-survey.md, new §8.** Follow-up check specifically
+  on the filesystem-coupling findings (§1a primary-host-from-local-disk,
+  §3 the spawn's ambient contract). Both confirmed unchanged against
+  current `main`, and the new environment-provider canonical-path
+  convention reinforces rather than loosens the assumption (fixed paths,
+  still rooted at one host's own local `dataDir`). One new primitive is a
+  real exception, so far unused: `MachineExecutor`
+  (`packages/plugin-sdk/src/machine-bootstrap.ts`), a plain SSH-shaped
+  `exec()` interface that decouples *bootstrapping the daemon onto a
+  target machine* from server-local filesystem/process access — but
+  scoped to bootstrap only. Both machine providers that exist today
+  (`manual`, `modal`) remain daemon-alongside once bootstrapped; nothing
+  shipped exercises this primitive for a structurally remote (daemon
+  split from workspace) topology.
 
 ## 2026-09-02
 

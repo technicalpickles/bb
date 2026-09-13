@@ -295,6 +295,56 @@ anything new:
 
 ---
 
+## 8. Update (2026-09-13): the coupling holds, minus one new bootstrap-only exception
+
+Re-checked §1a and §3 against upstream `main` after it shipped the
+environment-provider and machine-provider plugin work (see
+[CHANGELOG.md](CHANGELOG.md)). Both findings stand unchanged:
+
+- **§1a** — `resolvePrimaryHostId`
+  (`apps/server/src/services/hosts/primary-host.ts`) still calls
+  `readPrimaryHostIdFromDataDir({ dataDir: deps.config.dataDir })` first,
+  reading the host-id file out of the server's own data directory. No
+  meaningful diff since this branch's base commit.
+- **§3** — `prepareRuntimeShellEnv`
+  (`apps/host-daemon/src/runtime-shell-env.ts`) still hands the spawned
+  agent `PATH`, `BB_CLI` (an absolute path), `BB_HOST_DAEMON_PORT` (a
+  loopback port), and `cwd: workspacePath` — the only diff in the whole
+  window is an inline no-op refactor.
+- The new environment-provider canonical-path convention
+  (`environment-capability-model.md`, workspace materialization axis)
+  reinforces rather than loosens this: every bundled provider's path is
+  now fixed and predictable, but still rooted at `<dataDir>` on **one**
+  host's own local filesystem. It closed "no canonical path," not "the
+  path has to be local to the same machine as everything else."
+
+**One new primitive is a real, if so-far-unused, exception.**
+`MachineExecutor` (`packages/plugin-sdk/src/machine-bootstrap.ts`) is a
+plain `exec(command, ...) -> { exitCode }` interface — SSH-shaped — that a
+machine-provider plugin implements so core's `bootstrap()` can install and
+start the daemon on arbitrary compute without the server needing local
+filesystem/process access to it. That's genuine decoupling, but scoped
+narrowly to *bootstrapping the daemon onto a target machine*, not to the
+daemon-alongside topology itself: once bootstrapped, the daemon still runs
+on that same target compute, alongside the workspace and the agent
+process, subject to §1a/§3 exactly as before.
+
+It's also documented as the intended extension point for third parties —
+`plugins/bb-guide/skills/bb-plugin-authoring/references/backend-machines.md`
+has a full worked `custom-machine` example built on it — but nothing that
+shipped, core or plugin, actually exercises it for anything structurally
+remote. The two machine providers that exist today, `manual`
+(`apps/server/src/services/machines/manual-provider.ts`, core-owned — the
+same install-machine.sh flow this survey already documented) and `modal`
+(`plugins/environment-modal-sandbox`), are both daemon-alongside: Modal
+installs its own daemon onto the sandbox's filesystem and its environment
+side delegates straight to `environmentProviderId: "project-checkout"`, a
+plain local git checkout inside that same sandbox. Worth revisiting if a
+provider ever uses `MachineExecutor` to run the daemon somewhere other
+than where the workspace lives — nothing does yet.
+
+---
+
 ## What's actually blocking
 
 Superseded by the axes-based model in
