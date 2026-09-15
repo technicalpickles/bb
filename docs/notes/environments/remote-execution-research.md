@@ -524,6 +524,10 @@ The container recipe needs something to hold PID 1 open. Appending
 A real recipe should `exec` the daemon as PID 1 or run a supervisor.
 
 Corrected timing, clean run: **39s from `docker run` to `connected`.**
+[Stale as of 2026-09-03: `bb-app.tgz` for enrolled machines shrank 39.6MB
+→ 1.2MB (#2969, upstream `main`, not yet in this branch). Most of this
+39s was the full-artifact download; expect this number to drop
+significantly on a rerun. See CHANGELOG.md, 2026-09-03.]
 
 ### 8c. New leak: loopback hostname is a proxy for "same machine"
 
@@ -567,4 +571,6 @@ narrower than assumed for binaries and completely open for credentials.
   `127.0.0.1`-bound dev server. Do not generalize — on plain dockerd this
   would need `BB_SERVER_BIND_HOST=0.0.0.0`.
 - The dev server builds `/install/bb-app.tgz` on demand: 39s cold, 36MB.
+  [Stale as of 2026-09-03: enrolled machines now pull a host-only
+  artifact, ~1.2MB compressed (#2969). See CHANGELOG.md.]
 - `bb machine remove` requires `--yes` non-interactively.

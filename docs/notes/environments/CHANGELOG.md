@@ -5,6 +5,55 @@ this directory. Each entry names what changed, why, and which doc/section
 it affected. The docs themselves state current understanding, not the
 history of how they got there — use this file for that.
 
+## 2026-09-03
+
+- **Upstream sync.** Pulled `origin/main` (130 commits ahead of this
+  branch's base) and checked it for anything touching the claims here.
+  Two commits matter, both merged 2026-09-02 by Michael Yong:
+  - **[#2969](https://github.com/get-bb/bb/pull/2969), "Ship a host-only
+    artifact for enrolled machines."** Enrolled machines now install a
+    dedicated `bb-app#build:host` package (host daemon, provider/plugin
+    workers, host bins only) instead of the full server+web+SDK tarball:
+    39,602,419 B → 1,236,936 B compressed (96.9% smaller), fresh install
+    5.20s → 0.77s. This directly undercuts the timing evidence in
+    remote-execution-research.md §8b/§8e and design-position-and-
+    probes.md Part 1/P1 (39s `docker run`-to-`connected`, 39s/36MB
+    `bb-app.tgz` build) — those numbers were measured against the full
+    artifact this change replaces for the enrolled-machine path. Not
+    re-measured; flagged inline in both docs as stale pending a rerun.
+    No design claim (C1–C6) is affected — this is a distribution/size
+    optimization, not a change to daemon-alongside topology, capability
+    axes, or host-identity mechanics.
+  - **[#2972](https://github.com/get-bb/bb/pull/2972), "Avoid redundant
+    launchd restart during host enrollment."** Removes an unconditional
+    `launchctl kickstart -k` after `bootstrap` on macOS that was adding a
+    ~10s spawn-throttle delay to every install. Same script, same
+    `already_joined` branch discussed in design-position-and-probes.md
+    Part 3 — but a different code path (the persistent-service block,
+    not the `BB_INSTALL_SKIP_SERVICE` ephemeral-join block). **Confirmed
+    the already-joined/`BB_INSTALL_SKIP_SERVICE` bug this doc reports is
+    still open upstream** (`already_joined=yes` still skips `$join_pid`
+    entirely, unchanged by either commit).
+  - Checked and found **no upstream changes** to: `requirePrimaryHostId`,
+    `Environment.hostId`, `/internal/hosts/enroll-key`, the Daytona/Coder
+    validations, or the `pnpm bb:dev` positional-arg-before-flag parsing
+    bug (Part 3, "Incidental"). All open items in README.md's "Status"
+    section remain open as described.
+- **Filed both open bugs from README.md's follow-up list:**
+  [get-bb/bb#2997](https://github.com/get-bb/bb/issues/2997)
+  (`install-machine.sh` already-joined) and
+  [get-bb/bb#2998](https://github.com/get-bb/bb/issues/2998) (`bb:dev` CLI
+  arg parsing).
+- **design-position-and-probes.md, "Incidental" `pnpm bb:dev` note, root
+  cause found, scope narrowed.** Not a bb Commander bug: pnpm 9.15.0
+  forwards the literal `--` separator into a script's argv (npm strips
+  it), and `run-cli.ts` passes it straight through, so Commander treats
+  everything after it as positional. Confirmed the bug only reproduces
+  with `pnpm run bb:dev -- <args>` (explicit `run`, explicit `--`); this
+  repo's documented invocation, `pnpm bb:dev <args>` (README.md,
+  docs/debugging-and-qa.md), has neither `run` nor `--` and is unaffected.
+  Posted as a correction on #2998.
+
 ## 2026-09-02
 
 - **design-position-and-probes.md — C6 added, confirmed same day.** New

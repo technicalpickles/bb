@@ -50,8 +50,12 @@ live enrolled daemon) remains open — it needs cloud credits and tests C2,
 the strongest and least-verified claim in the design.
 
 Open follow-up work is tracked in taskwarrior (`task project:bb list`):
-two bugs found along the way (`install-machine.sh`'s already-joined branch
-never starts a daemon; a `pnpm bb:dev` CLI arg-parsing bug), one design
-pass (unifying `requirePrimaryHostId` with C6's host-identity-reclaim
-mechanism), one feature (exposing the internal host-reclaim route through a
-real CLI/UI surface), and P5 itself.
+two bugs found along the way, now filed as
+[get-bb/bb#2997](https://github.com/get-bb/bb/issues/2997)
+(`install-machine.sh`'s already-joined branch never starts a daemon under
+`BB_INSTALL_SKIP_SERVICE=1`) and
+[get-bb/bb#2998](https://github.com/get-bb/bb/issues/2998) (a `pnpm bb:dev`
+CLI arg-parsing bug, actually pnpm forwarding a literal `--` that Commander
+treats as end-of-options), one design pass (unifying `requirePrimaryHostId`
+with C6's host-identity-reclaim mechanism), one feature (exposing the
+internal host-reclaim route through a real CLI/UI surface), and P5 itself.

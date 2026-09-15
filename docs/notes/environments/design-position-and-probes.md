@@ -92,7 +92,10 @@ wiring task (fix `install-machine.sh`, add a CLI/UI surface for
 execution environment, so git, watcher, PTY, and the spawn contract are all
 untouched. Across = cheaper per environment, but re-plumbs the spawn's
 ambient contract. Current lean is alongside, spike-verified at 39s from
-`docker run` to `connected`.
+`docker run` to `connected`. [Stale as of 2026-09-03: this measurement
+predates a since-landed host-only install artifact (#2969, upstream
+`main`) that shrinks the enrolled-machine download ~97%; see
+CHANGELOG.md.]
 
 ---
 
@@ -533,9 +536,16 @@ across multiple unrelated CLI commands (`machine join-code --json`,
 many arguments for '<command>'. Expected N but got N+1` — a flag following
 a positional argument is miscounted as an extra positional. Worked around
 it by calling the HTTP API directly (`POST /hosts/join-codes`,
-`DELETE /hosts/:id`) instead of the CLI. Not investigated further; flagging
-it here since it blocked routine CLI use during this probe and would
-affect anyone else scripting against `bb:dev`.
+`DELETE /hosts/:id`) instead of the CLI. Filed as
+[get-bb/bb#2998](https://github.com/get-bb/bb/issues/2998). Root cause
+(confirmed 2026-09-03): not bb's argument parsing at all — pnpm 9.15.0
+forwards the `--` separator itself into the script's argv (npm strips it),
+and `run-cli.ts` passes that literal `--` straight to Commander, which
+then treats everything after it as positional. Narrower than it looked at
+the time: this repo's own docs (README.md, docs/debugging-and-qa.md)
+consistently document the shorthand `pnpm bb:dev <args>` with no `run` and
+no `--`, and that form is unaffected — only the more npm-idiomatic
+`pnpm run bb:dev -- <args>` used during this probe triggers it.
 
 ### Ordering
 

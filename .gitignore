@@ -89,3 +89,6 @@ provider-recordings/raw/
 **/provider-corpus/**
 !apps/server/test/provider-corpus/**
 !scripts/provider-corpus/**
+
+# Session handoff/close-out notes (agent-meta:park skill)
+.parkinglot/
