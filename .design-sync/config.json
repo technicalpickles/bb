@@ -1,0 +1,40 @@
+{
+  "projectId": "a326bed4-c969-47be-837a-85e56b39581e",
+  "shape": "package",
+  "pkg": "@bb/shared-ui",
+  "globalName": "BbUI",
+  "buildCmd": ".ds-sync/node_modules/.bin/tailwindcss -i .design-sync/tailwind.css -o packages/shared-ui/.ds-css/bb.css",
+  "tsconfig": "tsconfig.json",
+  "cssEntry": ".ds-css/bb.css",
+  "extraFonts": [
+    "../../@fontsource-variable/inter/index.css"
+  ],
+  "provider": {
+    "component": "TooltipProvider"
+  },
+  "overrides": {
+    "Tooltip": {
+      "cardMode": "single",
+      "viewport": "320x180"
+    }
+  },
+  "docsDir": "../../../../../.design-sync/docs",
+  "componentSrcMap": {
+    "Avatar": null,
+    "BreadcrumbEllipsis": null,
+    "Checkbox": null,
+    "Icon": null,
+    "InputOTPSeparator": null,
+    "PaginationEllipsis": null,
+    "Progress": null,
+    "ResourceActionButton": null,
+    "ResourceIconFrame": null,
+    "ResourceMultiSelectMenu": null,
+    "ResourceOptionMenu": null,
+    "ResourceOverflowMenu": null,
+    "ResourceRowDetailChevron": null,
+    "Slider": null,
+    "Textarea": null
+  },
+  "readmeHeader": ".design-sync/conventions.md"
+}

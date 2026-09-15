@@ -96,3 +96,13 @@ provider-recordings/raw/
 
 /plugins/.bundled-stage-*/
 /plugins/*/.bundled-runtime/
+
+# design-sync (claude.ai/design) build state
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
+packages/shared-ui/.ds-css/
+.design-sync/*.log
+packages/shared-ui/index.d.ts
