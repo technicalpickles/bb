@@ -16,14 +16,19 @@
     "Tooltip": {
       "cardMode": "single",
       "viewport": "320x180"
+    },
+    "Textarea": {
+      "cardMode": "column"
+    },
+    "DropdownMenuCheckboxItem": {
+      "cardMode": "single",
+      "primaryStory": "Default"
     }
   },
   "docsDir": "../../../../../.design-sync/docs",
   "componentSrcMap": {
     "Avatar": null,
     "BreadcrumbEllipsis": null,
-    "Checkbox": null,
-    "Icon": null,
     "InputOTPSeparator": null,
     "PaginationEllipsis": null,
     "Progress": null,
@@ -33,8 +38,7 @@
     "ResourceOptionMenu": null,
     "ResourceOverflowMenu": null,
     "ResourceRowDetailChevron": null,
-    "Slider": null,
-    "Textarea": null
+    "Slider": null
   },
   "readmeHeader": ".design-sync/conventions.md"
 }
